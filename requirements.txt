@@ -1,0 +1,11 @@
+streamlit
+trimesh
+plotly
+soundfile
+scipy
+imageio
+matplotlib
+streamlit-plotly-events
+rtree
+pyembree
+numpy
