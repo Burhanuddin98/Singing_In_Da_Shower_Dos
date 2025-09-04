@@ -139,10 +139,12 @@ def main():
             wet_norm = st.checkbox("Normalize wet to −1 dBFS", value=False)
             wet_trim = st.slider("Wet tail trim (s)",0.0,3.0,0.0,0.1)
             st.form_submit_button("Apply audio", use_container_width=True)
-
-        # --- Advanced (ODEON-ish) toggles ---
+            
         if use_lib and band_mode != "octave":
             st.info("Library materials are banded. Switch Band mode to **octave** for full effect.")
+
+        # --- Advanced (ODEON-ish) toggles ---
+
 
         with st.expander("Advanced (ODEON-ish)", expanded=False):
             nee_all_bounces = st.checkbox("NEE at every bounce (probabilistic after N)", value=True)
