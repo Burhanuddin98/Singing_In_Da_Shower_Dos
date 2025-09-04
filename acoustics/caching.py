@@ -1,5 +1,8 @@
 # acoustics/caching.py
 from __future__ import annotations
+import hashlib
+import numpy as np
+
 from typing import List, Tuple, Optional
 import hashlib, numpy as np, streamlit as st
 from .config import SimConfig, MaterialAuto, OCTAVE_CENTERS
