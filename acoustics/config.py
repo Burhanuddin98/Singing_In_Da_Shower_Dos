@@ -96,3 +96,14 @@ class SimConfig:
 
     # How to add the direct contribution
     direct_mode: str = "deterministic"  # "deterministic" | "sampled"
+
+        # Always sample NEE for the first N bounces (existing)
+    nee_bounces: int = 4
+
+    # NEW — probabilistic NEE for all later bounces:
+    nee_all_bounces: bool = True     # try NEE beyond first N bounces
+    nee_prob: float = 0.30           # probability per-bounce after N
+
+    # (Make sure these also exist if you use them elsewhere)
+    receiver_radius_m: float = 0.10
+    direct_mode: str = "deterministic"

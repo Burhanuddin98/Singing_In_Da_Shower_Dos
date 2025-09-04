@@ -123,14 +123,17 @@ def path_trace(scene: Scene, cfg: SimConfig):
             inv_p = 1.0
 
             if b < cfg.nee_bounces:
-                # always attempt for the first N bounces
                 attempt_nee = True
             else:
-                # after N, sample with probability nee_prob if enabled
                 if cfg.nee_all_bounces and cfg.nee_prob > 0.0:
                     if rng.random() < cfg.nee_prob:
                         attempt_nee = True
-                        inv_p = 1.0 / max(cfg.nee_prob, 1e-9)  # keep unbiased
+                        inv_p = 1.0 / max(cfg.nee_prob, 1e-9)
+
+            if attempt_nee:
+                # ... compute toR, leg, t, w_nee, etc ...
+                # and multiply contribution by inv_p before appending arrival
+
 
             if attempt_nee:
                 toR = scene.R - hit
