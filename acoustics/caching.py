@@ -1,6 +1,4 @@
 # acoustics/caching.py
-# Streamlit caching & glue for geometry/materials/tracing
-
 from __future__ import annotations
 
 import hashlib
@@ -13,6 +11,7 @@ from .config import SimConfig, MaterialAuto
 from .geometry import Intersector, face_connected_components
 from .tracing import Scene, path_trace, trace_preview_paths
 from .bands import standard_centers
+
 
 # ------------ Helpers / hashing ------------
 
@@ -67,7 +66,6 @@ def _expand_broadband_to_bands(alpha_face: np.ndarray, tau_face: np.ndarray, ban
 
 # ------------ Main cached tracer ------------
 
-from __future__ import annotations
 from typing import List, Tuple, Optional
 import hashlib, numpy as np, streamlit as st
 from .config import SimConfig, MaterialAuto, OCTAVE_CENTERS
