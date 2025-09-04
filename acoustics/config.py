@@ -1,24 +1,12 @@
 # acoustics/config.py
 from __future__ import annotations
 from dataclasses import dataclass
+from typing import List
 
-# Always sample NEE for the first N bounces (kept behavior)
-nee_bounces: int = 4
+# Default octave centers (extend if you like)
+OCTAVE_CENTERS: List[int] = [125, 250, 500, 1000, 2000, 4000]
 
-# NEW: enable NEE attempts beyond nee_bounces
-nee_all_bounces: bool = True         # try NEE at every bounce (after N, probabilistically)
-nee_prob: float = 0.30               # probability to attempt NEE per bounce after the first N
-
-
-# -----------------------------
-# Band definitions / lookups
-# -----------------------------
-
-# Octave-band centers (Hz). Extend if you need more.
-OCTAVE_CENTERS = [125, 250, 500, 1000, 2000, 4000]
-
-# Simple per-band air attenuation [dB/m].
-# (Placeholder; later you can compute ISO 9613-1 from temperature/RH.)
+# A simple fallback (rarely used now that ISO is available)
 AIR_DB_PER_M_OCT = {
     125: 0.01,
     250: 0.01,
@@ -28,9 +16,60 @@ AIR_DB_PER_M_OCT = {
     4000: 0.30,
 }
 
-# -----------------------------
-# Existing auto-material seed
-# -----------------------------
+
+@dataclass
+class SimConfig:
+    # Core acoustics
+    c: float = 343.0
+    fs: int = 48000
+    duration_s: float = 3.0
+
+    # Path tracing
+    rays: int = 8000
+    max_bounces: int = 8
+    rng_seed: int = 0
+    time_budget: float = 8.0
+    min_amp: float = 1e-6
+    include_direct: bool = True
+
+    # Materials & scattering
+    alpha_default: float = 0.05
+    scattering_deg: float = 7.0  # jitter RMS (deg)
+
+    # Air absorption (legacy flat slider)
+    air_db_per_m: float = 0.00
+
+    # Optional synthetic tail if IR is sparse
+    synth_tail_if_sparse: bool = False
+    synth_rt60_s: float = 1.5
+    synth_tail_level_db: float = -24.0
+
+    # === Advanced (ODEON-ish) controls ===
+    phys_normalization: bool = False      # unbiased MC estimator
+    band_mode: str = "broadband"          # "broadband" | "octave"
+    brdf_model: str = "specular+jitter"   # "specular+jitter" | "spec+lambert"
+    scatter_ratio: float = 0.0            # used if no per-face scatter map provided
+    transmission_paths: bool = False      # (stub: on hit, could spawn a transmit ray)
+    nee_mis: bool = False                 # (lite) divide NEE by ray count
+    russian_roulette: bool = True
+    scale_convention: str = "pressure"    # "pressure" | "intensity"
+    receiver_radius_m: float = 0.10       # NEE disk radius (approx solid angle)
+    direct_mode: str = "deterministic"    # "deterministic" | "sampled"
+
+    # NEE scheduling
+    nee_bounces: int = 4                  # always sample NEE up to this bounce count
+    nee_all_bounces: bool = True          # allow probabilistic NEE beyond nee_bounces
+    nee_prob: float = 0.30                # probability per bounce for NEE when beyond nee_bounces
+
+    # Angle-dependent absorption
+    angle_absorption: bool = False
+
+    # ISO-9613-1 air absorption (per band)
+    air_model: str = "flat"               # "flat" | "iso9613"
+    air_temp_c: float = 20.0
+    air_rh_pct: float = 50.0
+    air_pressure_kpa: float = 101.325
+
 
 @dataclass
 class MaterialAuto:
@@ -40,70 +79,3 @@ class MaterialAuto:
     alpha_default: float = 0.05
     nz_thresh: float = 0.3
     percentile_margin: float = 5.0
-
-# -----------------------------
-# Simulation configuration
-# -----------------------------
-
-@dataclass
-class SimConfig:
-    # ---- Base (kept from your original) ----
-    c: float = 343.0
-    fs: int = 48000
-    duration_s: float = 3.0
-    rays: int = 8000
-    max_bounces: int = 8
-    alpha_default: float = 0.05
-    scattering_deg: float = 7.0
-    air_db_per_m: float = 0.00
-    rng_seed: int = 0
-    time_budget: float = 8.0
-    nee_bounces: int = 4
-    nee_max_dist_m: float = 60.0
-    nee_min_dot: float = -0.25
-    min_amp: float = 1e-6
-    include_direct: bool = True
-    synth_tail_if_sparse: bool = False
-    synth_rt60_s: float = 1.5
-    synth_tail_level_db: float = -24.0
-
-    # ---- Advanced toggles (new; default preserves current behavior) ----
-    # Monte-Carlo estimator normalization (ray-count invariant)
-    phys_normalization: bool = False
-
-    # Banding mode: "broadband" (old behavior) or "octave" (new, per-band)
-    band_mode: str = "broadband"  # "broadband" | "octave"
-
-    # BRDF: legacy specular + Gaussian jitter, or specular + Lambert blend
-    brdf_model: str = "specular+jitter"  # "specular+jitter" | "spec+lambert"
-    scatter_ratio: float = 0.0           # (0..1) diffuse share when spec+lambert
-
-    # Transmission as actual paths (single pass-through spawn at first hit)
-    transmission_paths: bool = False
-
-    # NEE multiple-importance sampling (lite) toggle (safe no-op if unsupported)
-    nee_mis: bool = False
-
-    # Russian roulette termination for deep, low-energy paths
-    russian_roulette: bool = True
-
-    # Spreading law convention for amplitudes
-    scale_convention: str = "pressure"  # "pressure" (∝1/r) | "intensity" (∝1/r^2)
-
-    # ---- New controls used by MIS-lite / direct handling ----
-    # Receiver “disk” radius for NEE solid-angle approximation (meters)
-    receiver_radius_m: float = 0.10
-
-    # How to add the direct contribution
-    direct_mode: str = "deterministic"  # "deterministic" | "sampled"
-
-        # Always sample NEE for the first N bounces (existing)
-    nee_bounces: int = 4
-
-    # NEW — probabilistic NEE for all later bounces:
-    nee_all_bounces: bool = True     # try NEE beyond first N bounces
-    nee_prob: float = 0.30           # probability per-bounce after N
-
-    # (Make sure these also exist if you use them elsewhere)
-    receiver_radius_m: float = 0.10
-    direct_mode: str = "deterministic"

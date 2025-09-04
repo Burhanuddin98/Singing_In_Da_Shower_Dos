@@ -194,3 +194,37 @@ def decimate_line(x: np.ndarray, y: np.ndarray, max_points: int = 200_000):
         return x, y
     step = int(math.ceil(n / float(max_points)))
     return x[::step], y[::step]
+
+def _saturation_pressure_hPa(T):
+    # Buck equation (good 0–50C)
+    return 6.1121 * math.exp((18.678 - T/234.5) * (T/(257.14 + T)))
+
+def air_db_per_m_iso9613(freqs_hz: np.ndarray, T_c: float, RH_pct: float, p_kPa: float) -> np.ndarray:
+    """
+    ISO 9613-1 approximate atmospheric absorption in dB/m.
+    Good enough for room-scale sims and octave centers.
+    """
+    T = T_c + 273.15                      # K
+    p = p_kPa * 10.0                      # kPa -> hPa
+    RH = max(0.0, min(100.0, RH_pct)) / 100.0
+
+    # Molar concentration of water vapor h
+    Ps = _saturation_pressure_hPa(T_c)    # hPa
+    h = RH * Ps / p
+
+    # Relaxation frequencies (Hz)
+    frO = (24.0 + 4.04e4*h*(0.02 + h)/(0.391 + h)) * (p/1013.0) * ((293.15/T)**0.5)
+    frN = (T/293.15)**(-0.5) * (9.0 + 280.0*h * math.exp(-4.17*((T/293.15)**(-1.0/3.0) - 1.0)))
+
+    f = np.asarray(freqs_hz, dtype=float)
+    f2 = f*f
+
+    # ISO 9613-1 absorption in dB/m
+    # α = 8.686 * f^2 [ 1.84e-11 * (1/p)*(T/293)^0.5 + (T/293)^(-2.5) * ( 0.01275*exp(-2239.1/T)/(frO + f^2/frO) + 0.1068*exp(-3352/T)/(frN + f^2/frN) ) ]
+    term0 = 1.84e-11 * (1.0/(p/1013.0)) * ((T/293.15)**0.5)
+    termO = 0.01275 * math.exp(-2239.1/T) / (frO + (f2/frO))
+    termN = 0.10680 * math.exp(-3352.0/T) / (frN + (f2/frN))
+    alpha_np = 8.686 * f2 * ( term0 + ((T/293.15)**(-2.5)) * (termO + termN) )
+    # protect very low freq / zeros
+    alpha_np = np.maximum(alpha_np, 0.0)
+    return alpha_np.astype(np.float32)

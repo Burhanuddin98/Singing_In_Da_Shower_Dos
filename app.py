@@ -145,6 +145,13 @@ def main():
 
         # --- Advanced (ODEON-ish) toggles ---
         with st.expander("Advanced (ODEON-ish)", expanded=False):
+
+            air_model = st.selectbox("Air absorption model", ["flat", "iso9613"], index=0)
+            air_temp_c = st.slider("Air temperature (°C)", -10.0, 40.0, 20.0, 0.5)
+            air_rh_pct = st.slider("Relative humidity (%)", 0.0, 100.0, 50.0, 1.0)
+            air_pressure_kpa = st.slider("Atmospheric pressure (kPa)", 90.0, 105.0, 101.325, 0.05)
+
+
             nee_all_bounces = st.checkbox("NEE at every bounce (probabilistic after N)", value=True)
             nee_bounces     = st.slider("Always sample NEE for first N bounces", 0, 10, 4)
             nee_prob        = st.slider("NEE probability after N (per bounce)", 0.0, 1.0, 0.30, 0.05)
@@ -319,6 +326,12 @@ def main():
 
     # --- Config + cache key ---
     cfg = SimConfig(
+
+        air_model=str(air_model),
+        air_temp_c=float(air_temp_c),
+        air_rh_pct=float(air_rh_pct),
+        air_pressure_kpa=float(air_pressure_kpa),
+
         nee_bounces=int(nee_bounces),
         nee_all_bounces=bool(nee_all_bounces),
         nee_prob=float(nee_prob),
