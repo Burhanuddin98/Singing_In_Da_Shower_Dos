@@ -140,6 +140,10 @@ def main():
 
         # --- Advanced (ODEON-ish) toggles ---
         with st.expander("Advanced (ODEON-ish)", expanded=False):
+            nee_all_bounces = st.checkbox("NEE at every bounce (probabilistic after N)", value=True)
+            nee_bounces     = st.slider("Always sample NEE for first N bounces", 0, 10, 4)
+            nee_prob        = st.slider("NEE probability after N (per bounce)", 0.0, 1.0, 0.30, 0.05)
+
             phys_normalization = st.checkbox("Physically normalized (MC unbiased)", value=False)
             band_mode = st.selectbox("Band mode", ["broadband", "octave"], index=0)
             brdf_model = st.selectbox("BRDF model", ["specular+jitter", "spec+lambert"], index=0)
@@ -261,6 +265,9 @@ def main():
 
     # --- Config + cache key ---
     cfg = SimConfig(
+        nee_bounces=int(nee_bounces),
+        nee_all_bounces=bool(nee_all_bounces),
+        nee_prob=float(nee_prob),
         c=343.0, fs=int(fs), duration_s=float(dur), rays=int(rays), max_bounces=int(max_bounces),
         alpha_default=float(alpha_default), scattering_deg=float(scattering), air_db_per_m=float(air_dbm),
         rng_seed=int(seed), time_budget=float(time_budget), min_amp=float(min_amp), include_direct=bool(include_direct),

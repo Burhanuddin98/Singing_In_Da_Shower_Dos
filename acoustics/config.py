@@ -2,6 +2,14 @@
 from __future__ import annotations
 from dataclasses import dataclass
 
+# Always sample NEE for the first N bounces (kept behavior)
+nee_bounces: int = 4
+
+# NEW: enable NEE attempts beyond nee_bounces
+nee_all_bounces: bool = True         # try NEE at every bounce (after N, probabilistically)
+nee_prob: float = 0.30               # probability to attempt NEE per bounce after the first N
+
+
 # -----------------------------
 # Band definitions / lookups
 # -----------------------------

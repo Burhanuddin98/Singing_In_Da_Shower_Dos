@@ -119,7 +119,20 @@ def path_trace(scene: Scene, cfg: SimConfig):
                 continue
 
             # ---- Next-Event Estimation to receiver (MIS-lite) ----
+            attempt_nee = False
+            inv_p = 1.0
+
             if b < cfg.nee_bounces:
+                # always attempt for the first N bounces
+                attempt_nee = True
+            else:
+                # after N, sample with probability nee_prob if enabled
+                if cfg.nee_all_bounces and cfg.nee_prob > 0.0:
+                    if rng.random() < cfg.nee_prob:
+                        attempt_nee = True
+                        inv_p = 1.0 / max(cfg.nee_prob, 1e-9)  # keep unbiased
+
+            if attempt_nee:
                 toR = scene.R - hit
                 dist2 = float(np.dot(toR, toR))
                 if dist2 <= (cfg.nee_max_dist_m ** 2):
@@ -128,14 +141,14 @@ def path_trace(scene: Scene, cfg: SimConfig):
                         leg = float(math.sqrt(dist2))
                         t = (traveled2 + leg) / cfg.c
 
-                        # PDFs for MIS-lite (conservative: tracer used uniform-sphere initially)
+                        # PDFs for MIS-lite (conservative)
                         pdf_pt = pdf_dir
                         pdf_nee = receiver_pdf_solid_angle(leg, cfg.receiver_radius_m)
                         w_nee = mis_weight(pdf_nee, pdf_pt) if cfg.nee_mis else 1.0
 
                         if B == 1:
                             base = float(amp_after[0]) * spread_fn(traveled2 + leg) * air_lin(cfg.air_db_per_m, traveled2 + leg)
-                            contrib = base * w_nee
+                            contrib = base * w_nee * inv_p
                             if cfg.phys_normalization:
                                 contrib *= ray_weight
                             arrivals.append((t, contrib, b + 1))
@@ -145,9 +158,11 @@ def path_trace(scene: Scene, cfg: SimConfig):
                             wv = amp_after * spread_fn(traveled2 + leg) * air_vec
                             if cfg.nee_mis:
                                 wv *= w_nee
+                            wv *= inv_p
                             if cfg.phys_normalization:
                                 wv *= ray_weight
                             arrivals.append((t, wv.astype(np.float32), b + 1))
+
 
             # ---- Russian roulette (after a few bounces) ----
             if cfg.russian_roulette and b >= 3:
