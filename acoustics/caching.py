@@ -1,14 +1,19 @@
 # acoustics/caching.py
-from __future__ import annotations
-import hashlib
-import numpy as np
+# Streamlit caching & glue for geometry/materials/tracing
 
-from typing import List, Tuple, Optional
-import hashlib, numpy as np, streamlit as st
-from .config import SimConfig, MaterialAuto, OCTAVE_CENTERS
+from __future__ import annotations
+
+import hashlib
+from typing import Optional, Tuple, List
+
+import numpy as np
+import streamlit as st
+
+from .config import SimConfig, MaterialAuto
 from .geometry import Intersector, face_connected_components
 from .tracing import Scene, path_trace, trace_preview_paths
 from .bands import standard_centers
+
 
 
 try:
