@@ -1,4 +1,6 @@
 from __future__ import annotations
+from acoustics.materials import builtin_library, to_broadband
+from acoustics.config import OCTAVE_CENTERS
 import io, os, math, hashlib, numpy as np, streamlit as st
 import plotly.graph_objects as go
 
@@ -139,6 +141,9 @@ def main():
             st.form_submit_button("Apply audio", use_container_width=True)
 
         # --- Advanced (ODEON-ish) toggles ---
+        if use_lib and band_mode != "octave":
+            st.info("Library materials are banded. Switch Band mode to **octave** for full effect.")
+
         with st.expander("Advanced (ODEON-ish)", expanded=False):
             nee_all_bounces = st.checkbox("NEE at every bounce (probabilistic after N)", value=True)
             nee_bounces     = st.slider("Always sample NEE for first N bounces", 0, 10, 4)
@@ -202,6 +207,18 @@ def main():
     alpha_init = np.array([float(np.median(alpha_auto[c])) if c.size else alpha_default for c in components], dtype=float)
 
     # ===== Per-element materials (α and τ) =====
+    use_lib = st.checkbox("Use library materials (octave bands) per element", value=False, help="Overrides the numeric α/τ table below when ON.")
+    lib = builtin_library(OCTAVE_CENTERS)
+    lib_names = list(lib.keys())
+
+    if use_lib:
+        st.caption("Assign a library material to each element. α/τ per-band will be used for tracing (octave mode recommended).")
+        # One select per element (compact). You can optimize later for large meshes.
+        mat_choices = []
+        for gid, count in zip(group_ids, faces_count):
+            sel = st.selectbox(f"Element {int(gid)} — {int(count)} faces", lib_names, index=lib_names.index("Concrete") if "Concrete" in lib_names else 0, key=f"lib_{int(gid)}")
+            mat_choices.append(sel)
+
     st.subheader("Per-element materials")
     base_rows = [{"Element ID": int(g), "Faces": int(c), "α (absorption)": float(a), "τ (transmission)": 0.00}
                  for g, c, a in zip(group_ids, faces_count, alpha_init)]
@@ -217,11 +234,36 @@ def main():
     alpha_group = np.clip(alpha_group, 0.0, 0.99)
     tau_group = np.clip(tau_group, 0.0, 0.99 - alpha_group)
 
+    # Build per-face α/τ (broadband by default)
     alpha_face = np.full(len(F), float(alpha_default), dtype=np.float32)
-    tau_face = np.zeros(len(F), dtype=np.float32)
-    for gi, faces_idx in enumerate(components):
-        alpha_face[faces_idx] = float(alpha_group[gi])
-        tau_face[faces_idx] = float(tau_group[gi])
+    tau_face   = np.zeros(len(F), dtype=np.float32)
+
+    if not use_lib:
+        # existing numeric editor path
+        for gi, faces_idx in enumerate(components):
+            alpha_face[faces_idx] = float(alpha_group[gi])
+            tau_face[faces_idx]   = float(tau_group[gi])
+        alpha_face_b_override = None
+        tau_face_b_override = None
+        bands_override = None
+    else:
+        # Library path → per-band arrays (F x B)
+        B = len(OCTAVE_CENTERS)
+        alpha_face_b_override = np.zeros((len(F), B), dtype=np.float32)
+        tau_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
+
+        # Also maintain broadband α/τ for preview captions (means)
+        for gi, faces_idx in enumerate(components):
+            mb = lib[mat_choices[gi]]
+            # Per-band copy
+            alpha_face_b_override[faces_idx, :] = mb.alpha[None, :]
+            tau_face_b_override[faces_idx,   :] = mb.tau[None, :]
+            # Broadband collapse for preview table & any legacy pieces
+            a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
+            alpha_face[faces_idx] = a_bb
+            tau_face[faces_idx]   = t_bb
+        bands_override = OCTAVE_CENTERS
+
 
     # Positions
     S = np.array([Sx, Sy, Sz], dtype=float); R = np.array([Rx, Ry, Rz], dtype=float)
@@ -292,7 +334,15 @@ def main():
     # --- Run simulation ---
     run_clicked = run
     if run_clicked:
-        h, arrivals, polylines = trace_cached(cfg_key, V, F, S, R, alpha_face.copy(), tau_face.copy(), band_mode=str(band_mode))
+        h, arrivals, polylines = trace_cached(
+            cfg_key, V, F, S, R,
+            alpha_face.copy(), tau_face.copy(),
+            band_mode=str(band_mode),
+            alpha_face_b_override=alpha_face_b_override,
+            tau_face_b_override=tau_face_b_override,
+            bands_override=bands_override
+        )
+
         st.session_state.update({
             "h": h, "arrivals": arrivals, "polylines": polylines, "V": V, "F": F, "S": S, "R": R,
             "edge_cap": int(edge_cap), "mesh_opacity": float(mesh_opacity), "sim_sig": sim_sig,

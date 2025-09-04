@@ -95,7 +95,10 @@ def trace_cached(cfg_key: tuple,
                  V: np.ndarray, F: np.ndarray,
                  S: np.ndarray, R: np.ndarray,
                  alpha_face: np.ndarray, tau_face: np.ndarray,
-                 band_mode: str):
+                 band_mode: str,
+                 alpha_face_b_override: np.ndarray | None = None,
+                 tau_face_b_override: np.ndarray | None = None,
+                 bands_override: list[int] | None = None):
     """
     Build scene, run tracer, and return:
       - h (1D or [B,N] if banded)
@@ -111,10 +114,15 @@ def trace_cached(cfg_key: tuple,
 
     # Bands
     if band_mode == "octave":
-        bands = OCTAVE_CENTERS
-        alpha_b, tau_b = expand_broadband_to_bands(alpha_face, tau_face, bands)
+        if (alpha_face_b_override is not None) and (tau_face_b_override is not None):
+            bands = bands_override if bands_override is not None else OCTAVE_CENTERS
+            alpha_b = alpha_face_b_override.astype(np.float32)
+            tau_b   = tau_face_b_override.astype(np.float32)
+        else:
+            bands = OCTAVE_CENTERS
+            alpha_b, tau_b = expand_broadband_to_bands(alpha_face, tau_face, bands)
     else:
-        bands = [1000]  # dummy single-band center for broadband
+        bands = [1000]
         alpha_b = alpha_face.reshape(-1, 1).astype(np.float32)
         tau_b   = tau_face.reshape(-1, 1).astype(np.float32)
 
