@@ -1,11 +1,34 @@
 # acoustics/__init__.py
+from __future__ import annotations
 
-# ---- Config & band tables ----
+# ---- Public config / constants ----
 from .config import (
     SimConfig,
     MaterialAuto,
     OCTAVE_CENTERS,
     AIR_DB_PER_M_OCT,
+)
+
+# ---- Physics helpers (math, binning, air, spreading) ----
+from .physics import (
+    unit,
+    reflect,
+    sample_unit_sphere,
+    jitter_direction,
+    cosine_hemisphere_sample,
+    phong_lobe_sample,
+    pressure_spread,
+    intensity_spread,
+    pick_spread_fn,
+    inv_spherical_spreading,   # legacy shim (still safe to export)
+    air_lin,
+    air_lin_vec,
+    bin_arrivals_to_ir,
+    bin_arrivals_to_ir_banded,
+    schroeder_edc,
+    estimate_rt60_from_edc,
+    effective_t_end_from_edc,
+    decimate_line,
 )
 
 # ---- Geometry / intersector ----
@@ -15,29 +38,6 @@ from .geometry import (
     build_trimesh_from_arrays,
 )
 
-# ---- Physics utilities & metrics ----
-from .physics import (
-    # vector math / sampling
-    unit,
-    reflect,
-    sample_unit_sphere,
-    jitter_direction,
-    cosine_hemisphere_sample,
-    # scaling / air attenuation
-    pressure_spread,
-    intensity_spread,
-    pick_spread_fn,
-    air_lin,
-    air_lin_vec,
-    # IR / EDC helpers
-    bin_arrivals_to_ir,
-    bin_arrivals_to_ir_banded,
-    schroeder_edc,
-    estimate_rt60_from_edc,
-    effective_t_end_from_edc,
-    decimate_line,
-)
-
 # ---- Tracing core ----
 from .tracing import (
     Scene,
@@ -45,7 +45,7 @@ from .tracing import (
     trace_preview_paths,
 )
 
-# ---- Visualization & audio I/O ----
+# ---- Visualization / audio helpers ----
 from .viz import (
     make_fig,
     add_source_receiver,
@@ -60,7 +60,7 @@ from .animation import (
     render_gif_one_ray_matplotlib,
 )
 
-# ---- Streamlit caching & glue ----
+# ---- Streamlit caching / glue ----
 from .caching import (
     mesh_hash_from_arrays,
     build_components_cached,
@@ -70,22 +70,26 @@ from .caching import (
 )
 
 __all__ = [
-    # config
+    # Config
     "SimConfig", "MaterialAuto", "OCTAVE_CENTERS", "AIR_DB_PER_M_OCT",
-    # geometry
-    "Intersector", "face_connected_components", "build_trimesh_from_arrays",
-    # physics
-    "unit", "reflect", "sample_unit_sphere", "jitter_direction", "cosine_hemisphere_sample",
-    "pressure_spread", "intensity_spread", "pick_spread_fn", "air_lin", "air_lin_vec",
+    # Physics
+    "unit", "reflect", "sample_unit_sphere", "jitter_direction",
+    "cosine_hemisphere_sample", "phong_lobe_sample",
+    "pressure_spread", "intensity_spread", "pick_spread_fn",
+    "inv_spherical_spreading", "air_lin", "air_lin_vec",
     "bin_arrivals_to_ir", "bin_arrivals_to_ir_banded",
-    "schroeder_edc", "estimate_rt60_from_edc", "effective_t_end_from_edc", "decimate_line",
-    # tracing
+    "schroeder_edc", "estimate_rt60_from_edc", "effective_t_end_from_edc",
+    "decimate_line",
+    # Geometry
+    "Intersector", "face_connected_components", "build_trimesh_from_arrays",
+    # Tracing
     "Scene", "path_trace", "trace_preview_paths",
-    # viz
-    "make_fig", "add_source_receiver", "overlay_highlight", "wav_bytes", "spectrogram_figure",
-    # animation
+    # Viz
+    "make_fig", "add_source_receiver", "overlay_highlight",
+    "wav_bytes", "spectrogram_figure",
+    # Animation
     "create_ray_animation_figure", "render_gif_one_ray_matplotlib",
-    # caching
-    "mesh_hash_from_arrays", "build_components_cached", "build_intersector_cached",
-    "auto_alpha_cached", "trace_cached",
+    # Caching
+    "mesh_hash_from_arrays", "build_components_cached",
+    "build_intersector_cached", "auto_alpha_cached", "trace_cached",
 ]
