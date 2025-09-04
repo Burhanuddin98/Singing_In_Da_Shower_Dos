@@ -130,10 +130,6 @@ def path_trace(scene: Scene, cfg: SimConfig):
                         attempt_nee = True
                         inv_p = 1.0 / max(cfg.nee_prob, 1e-9)
 
-            if attempt_nee:
-                # ... compute toR, leg, t, w_nee, etc ...
-                # and multiply contribution by inv_p before appending arrival
-
 
             if attempt_nee:
                 toR = scene.R - hit
