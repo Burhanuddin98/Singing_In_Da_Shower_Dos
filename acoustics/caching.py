@@ -14,17 +14,6 @@ from .geometry import Intersector, face_connected_components
 from .tracing import Scene, path_trace, trace_preview_paths
 from .bands import standard_centers
 
-
-
-try:
-    import trimesh
-except Exception:
-    trimesh = None  # app guards this already
-
-from .config import SimConfig, MaterialAuto, OCTAVE_CENTERS
-from .geometry import Intersector, face_connected_components
-from .tracing import Scene, path_trace, trace_preview_paths
-
 # ------------ Helpers / hashing ------------
 
 def mesh_hash_from_arrays(V: np.ndarray, F: np.ndarray) -> str:
