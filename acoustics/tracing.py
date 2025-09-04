@@ -159,13 +159,29 @@ def path_trace(scene: Scene, cfg: SimConfig):
 
             # ---- Choose outgoing direction (BRDF) ----
             n = scene.mesh.face_normals[fidx]
+            # --- Energy-conserving throughput for diffuse branch ---
+            # r2 is the energy reflectance we already computed: r2 = 1 - a_vec - t_vec
+            # If we chose diffuse this bounce, multiply throughput by r2 instead of sqrt(r2).
+            # Because for a Lambertian BRDF sampled with cosine hemisphere, BRDF*cos/pdf = r2 (per band).
             if cfg.brdf_model == "spec+lambert" and cfg.scatter_ratio > 0.0:
+                chose_diffuse = False
+                # re-draw decision (we just made it above). Capture the outcome.
                 if rng.random() < cfg.scatter_ratio:
-                    d_new = cosine_hemisphere_sample(n, rng)   # diffuse
+                    chose_diffuse = True
+                    d_new = cosine_hemisphere_sample(n, rng)
                 else:
-                    d_new = reflect(dvec, n)                   # specular
+                    d_new = reflect(dvec, n)
+
+                if chose_diffuse:
+                    # Use r2 (not sqrt) for energy conservation
+                    amp_after = (amp_reflect * np.maximum(0.0, 1.0 - a_vec - t_vec)).astype(np.float32)
+                else:
+                    # Specular stays with amplitude reflectance sqrt(r2)
+                    amp_after = (amp_reflect * np.sqrt(np.maximum(0.0, 1.0 - a_vec - t_vec))).astype(np.float32)
             else:
-                d_new = reflect(dvec, n)                       # legacy behavior
+                d_new = reflect(dvec, n)
+                amp_after = (amp_reflect * np.sqrt(np.maximum(0.0, 1.0 - a_vec - t_vec))).astype(np.float32)
+
             d_new = jitter_direction(d_new, sigma, rng)
 
             # ---- Reflect path continues ----
