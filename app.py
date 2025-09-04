@@ -1,6 +1,9 @@
 from __future__ import annotations
+
+# --- Optional banded materials (library) ---
 from acoustics.materials import builtin_library, to_broadband
 from acoustics.config import OCTAVE_CENTERS
+
 import io, os, math, hashlib, numpy as np, streamlit as st
 import plotly.graph_objects as go
 
@@ -141,7 +144,6 @@ def main():
             st.form_submit_button("Apply audio", use_container_width=True)
 
         # --- Advanced (ODEON-ish) toggles ---
-        
         with st.expander("Advanced (ODEON-ish)", expanded=False):
             nee_all_bounces = st.checkbox("NEE at every bounce (probabilistic after N)", value=True)
             nee_bounces     = st.slider("Always sample NEE for first N bounces", 0, 10, 4)
@@ -164,7 +166,8 @@ def main():
         run = st.button("Run / Update simulation", type="primary", use_container_width=True)
 
     if f is None:
-        st.info("Upload a mesh to begin."); return
+        st.info("Upload a mesh to begin.")
+        return
 
     # --- Load mesh ---
     try:
@@ -177,7 +180,8 @@ def main():
                 geoms = [g for g in getattr(mesh, 'geometry', {}).values() if isinstance(g, trimesh.Trimesh)]
                 mesh = trimesh.util.concatenate(tuple(geoms))
     except Exception as e:
-        st.error(f"Failed to load mesh: {e}"); return
+        st.error(f"Failed to load mesh: {e}")
+        return
 
     scale = 1.0 / float(units_per_meter)
     if abs(scale - 1.0) > 1e-12:
@@ -191,7 +195,8 @@ def main():
         try:
             import rtree  # noqa: F401
         except Exception:
-            st.error("rtree required without Embree: conda install -c conda-forge rtree"); st.stop()
+            st.error("rtree required without Embree: conda install -c conda-forge rtree")
+            st.stop()
 
     V = np.asarray(mesh.vertices); F = np.asarray(mesh.faces)
     mesh_key = mesh_hash_from_arrays(V, F)
@@ -205,19 +210,32 @@ def main():
     alpha_init = np.array([float(np.median(alpha_auto[c])) if c.size else alpha_default for c in components], dtype=float)
 
     # ===== Per-element materials (α and τ) =====
-    use_lib = st.checkbox("Use library materials (octave bands) per element", value=False, help="Overrides the numeric α/τ table below when ON.")
+    st.subheader("Per-element materials")
+
+    # Define use_lib here (NOT in sidebar)
+    use_lib = st.checkbox(
+        "Use library materials (octave bands) per element",
+        value=False,
+        help="Overrides the numeric α/τ table below when ON."
+    )
+
     lib = builtin_library(OCTAVE_CENTERS)
     lib_names = list(lib.keys())
 
+    # Build the library assignment UI if enabled
     if use_lib:
         st.caption("Assign a library material to each element. α/τ per-band will be used for tracing (octave mode recommended).")
-        # One select per element (compact). You can optimize later for large meshes.
         mat_choices = []
         for gid, count in zip(group_ids, faces_count):
-            sel = st.selectbox(f"Element {int(gid)} — {int(count)} faces", lib_names, index=lib_names.index("Concrete") if "Concrete" in lib_names else 0, key=f"lib_{int(gid)}")
+            sel = st.selectbox(
+                f"Element {int(gid)} — {int(count)} faces",
+                lib_names,
+                index=lib_names.index("Concrete") if "Concrete" in lib_names else 0,
+                key=f"lib_{int(gid)}"
+            )
             mat_choices.append(sel)
 
-    st.subheader("Per-element materials")
+    # Always show the numeric table (still useful for preview/broadband)
     base_rows = [{"Element ID": int(g), "Faces": int(c), "α (absorption)": float(a), "τ (transmission)": 0.00}
                  for g, c, a in zip(group_ids, faces_count, alpha_init)]
     table = st.data_editor(base_rows, hide_index=True, num_rows="fixed", key="mat_table")
@@ -237,7 +255,7 @@ def main():
     tau_face   = np.zeros(len(F), dtype=np.float32)
 
     if not use_lib:
-        # existing numeric editor path
+        # numeric editor → per-face arrays
         for gi, faces_idx in enumerate(components):
             alpha_face[faces_idx] = float(alpha_group[gi])
             tau_face[faces_idx]   = float(tau_group[gi])
@@ -245,23 +263,19 @@ def main():
         tau_face_b_override = None
         bands_override = None
     else:
-        # Library path → per-band arrays (F x B)
+        # Library path → per-band arrays (F x B) + broadband preview fill
         B = len(OCTAVE_CENTERS)
         alpha_face_b_override = np.zeros((len(F), B), dtype=np.float32)
         tau_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
 
-        # Also maintain broadband α/τ for preview captions (means)
         for gi, faces_idx in enumerate(components):
             mb = lib[mat_choices[gi]]
-            # Per-band copy
             alpha_face_b_override[faces_idx, :] = mb.alpha[None, :]
             tau_face_b_override[faces_idx,   :] = mb.tau[None, :]
-            # Broadband collapse for preview table & any legacy pieces
             a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
             alpha_face[faces_idx] = a_bb
             tau_face[faces_idx]   = t_bb
         bands_override = OCTAVE_CENTERS
-
 
     # Positions
     S = np.array([Sx, Sy, Sz], dtype=float); R = np.array([Rx, Ry, Rz], dtype=float)
@@ -340,7 +354,6 @@ def main():
             tau_face_b_override=tau_face_b_override,
             bands_override=bands_override
         )
-
         st.session_state.update({
             "h": h, "arrivals": arrivals, "polylines": polylines, "V": V, "F": F, "S": S, "R": R,
             "edge_cap": int(edge_cap), "mesh_opacity": float(mesh_opacity), "sim_sig": sim_sig,
@@ -353,7 +366,7 @@ def main():
     polylines = st.session_state.get("polylines", [])
     session_band_mode = st.session_state.get("band_mode", "broadband")
 
-    def to_broadband(h_in):
+    def _to_broadband(h_in):
         if h_in is None:
             return None
         arr = np.asarray(h_in)
@@ -361,7 +374,7 @@ def main():
             return arr.sum(axis=0).astype(np.float32)
         return arr.astype(np.float32)
 
-    h_plot = to_broadband(h_any)
+    h_plot = _to_broadband(h_any)
 
     if h_plot is None:
         st.info("No IR yet — you can still audition the **dry** file below; press **Run / Update** to compute the IR and wet audio.")
@@ -467,7 +480,6 @@ def main():
             st.caption("Upload a dry audio file in the sidebar to enable playback and spectrograms.")
 
     # --- Ray-path preview (subset) ---
-    polylines = polylines or []
     if polylines:
         st.subheader("Ray-path preview (subset)")
         fig2 = make_fig(mesh, edge_cap=int(st.session_state.get("edge_cap", edge_cap)),
