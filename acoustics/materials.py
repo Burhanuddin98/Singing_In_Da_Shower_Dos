@@ -1,78 +1,86 @@
 # acoustics/materials.py
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List
 import numpy as np
-
-# Octave centers we target: align with config.OCTAVE_CENTERS
-DEFAULT_BANDS = [125, 250, 500, 1000, 2000, 4000]
+from .bands import resample_bands
 
 @dataclass
-class MaterialBands:
+class Material:
     name: str
-    bands: List[int]
-    alpha: np.ndarray      # shape (B,) absorption
-    scatter: np.ndarray    # shape (B,) scattering [0..1], diffuse share
-    tau: np.ndarray        # shape (B,) transmission
+    freqs: np.ndarray            # native band centers (Hz)
+    alpha: np.ndarray            # (B,)
+    tau:   np.ndarray            # (B,)
+    scatter: np.ndarray          # (B,)
 
-# A tiny “starter” library. Numbers are illustrative but reasonable.
-# Replace/extend freely later or load from YAML.
-def builtin_library(bands: List[int] = DEFAULT_BANDS) -> Dict[str, MaterialBands]:
-    B = len(bands)
+    def to_bands(self, dst_freqs: np.ndarray) -> "Material":
+        return Material(
+            name=self.name,
+            freqs=np.asarray(dst_freqs, float),
+            alpha=resample_bands(self.freqs, self.alpha, dst_freqs),
+            tau=resample_bands(self.freqs, self.tau, dst_freqs),
+            scatter=resample_bands(self.freqs, self.scatter, dst_freqs),
+        )
 
-    def arr(vals):
-        vals = list(vals)
-        if len(vals) != B:
-            raise ValueError(f"Material requires {B} band values.")
-        return np.array(vals, dtype=np.float32)
+def _mat(name, f, a, t, s):
+    f = np.asarray(f, float)
+    a = np.asarray(a, float)
+    t = np.asarray(t, float)
+    s = np.asarray(s, float)
+    # Safety clamps
+    a = np.clip(a, 0.0, 0.99)
+    t = np.clip(t, 0.0, 0.99 - a)
+    s = np.clip(s, 0.0, 1.0)
+    return Material(name, f, a, t, s)
+
+def builtin_library(native_mode: str = "octave") -> Dict[str, Material]:
+    """
+    Minimal starter library (expand as needed).
+    The tables below are illustrative—replace with your measured/vendor data.
+    """
+    # native table centers (octaves)
+    F = np.array([125, 250, 500, 1000, 2000, 4000], dtype=float)
 
     lib = {
-        "Concrete": MaterialBands(
-            "Concrete", bands,
-            alpha=arr([0.01, 0.01, 0.015, 0.02, 0.02, 0.02]),
-            scatter=arr([0.05, 0.05, 0.06, 0.08, 0.10, 0.10]),
-            tau=arr([0.00, 0.00, 0.00, 0.00, 0.00, 0.00]),
-        ),
-        "Painted Brick": MaterialBands(
-            "Painted Brick", bands,
-            alpha=arr([0.02, 0.02, 0.03, 0.04, 0.05, 0.07]),
-            scatter=arr([0.10, 0.10, 0.12, 0.14, 0.16, 0.18]),
-            tau=arr([0.00, 0.00, 0.00, 0.00, 0.00, 0.00]),
-        ),
-        "Carpet on pad": MaterialBands(
-            "Carpet on pad", bands,
-            alpha=arr([0.02, 0.06, 0.14, 0.37, 0.60, 0.65]),
-            scatter=arr([0.20, 0.20, 0.25, 0.30, 0.30, 0.30]),
-            tau=arr([0.00, 0.00, 0.00, 0.00, 0.00, 0.00]),
-        ),
-        "Gypsum 12mm": MaterialBands(
-            "Gypsum 12mm", bands,
-            alpha=arr([0.29, 0.10, 0.05, 0.04, 0.07, 0.09]),
-            scatter=arr([0.10, 0.10, 0.10, 0.12, 0.12, 0.15]),
-            tau=arr([0.02, 0.02, 0.01, 0.01, 0.01, 0.01]),
-        ),
-        "Curtain heavy": MaterialBands(
-            "Curtain heavy", bands,
-            alpha=arr([0.05, 0.10, 0.15, 0.40, 0.70, 0.70]),
-            scatter=arr([0.20, 0.25, 0.30, 0.35, 0.35, 0.35]),
-            tau=arr([0.00, 0.00, 0.00, 0.00, 0.00, 0.00]),
-        ),
-        "Glass 6mm": MaterialBands(
-            "Glass 6mm", bands,
-            alpha=arr([0.18, 0.06, 0.04, 0.03, 0.02, 0.02]),
-            scatter=arr([0.05, 0.05, 0.06, 0.06, 0.08, 0.10]),
-            tau=arr([0.35, 0.40, 0.45, 0.45, 0.40, 0.35]),
-        ),
+        "Concrete": _mat("Concrete", F,
+            a=np.array([0.02, 0.02, 0.02, 0.02, 0.02, 0.03]),
+            t=np.zeros_like(F),
+            s=np.array([0.03, 0.03, 0.03, 0.03, 0.02, 0.02])),
+        "Brick": _mat("Brick", F,
+            a=np.array([0.03, 0.03, 0.04, 0.04, 0.05, 0.05]),
+            t=np.zeros_like(F),
+            s=np.array([0.05, 0.05, 0.06, 0.06, 0.06, 0.06])),
+        "Gypsum board": _mat("Gypsum board", F,
+            a=np.array([0.29, 0.10, 0.05, 0.04, 0.07, 0.09]),
+            t=np.zeros_like(F),
+            s=np.array([0.20, 0.20, 0.25, 0.25, 0.30, 0.35])),
+        "Carpet (on pad)": _mat("Carpet (on pad)", F,
+            a=np.array([0.08, 0.24, 0.57, 0.69, 0.71, 0.73]),
+            t=np.zeros_like(F),
+            s=np.array([0.40, 0.60, 0.70, 0.75, 0.75, 0.75])),
+        "Glass": _mat("Glass", F,
+            a=np.array([0.18, 0.06, 0.04, 0.03, 0.02, 0.02]),
+            t=np.array([0.00, 0.02, 0.03, 0.05, 0.05, 0.05]),
+            s=np.array([0.05, 0.05, 0.05, 0.05, 0.05, 0.05])),
+        "Acoustic tile": _mat("Acoustic tile", F,
+            a=np.array([0.32, 0.51, 0.64, 0.70, 0.73, 0.75]),
+            t=np.zeros_like(F),
+            s=np.array([0.40, 0.55, 0.60, 0.65, 0.65, 0.65])),
     }
     return lib
 
-
 def to_broadband(alpha_b: np.ndarray, tau_b: np.ndarray, method: str = "mean"):
-    """Collapse per-band to a single broadband for legacy paths/preview UI."""
+    a = np.asarray(alpha_b, float); t = np.asarray(tau_b, float)
     if method == "mean":
-        return float(np.clip(alpha_b.mean(), 0.0, 0.99)), float(np.clip(tau_b.mean(), 0.0, 0.99))
-    elif method == "energy":
-        # Energy-mean (weights high bands slightly more if you later weight by 1/3-oct width)
-        return float(np.clip(np.mean(alpha_b), 0.0, 0.99)), float(np.clip(np.mean(tau_b), 0.0, 0.99))
-    else:
-        raise ValueError("Unknown broadband collapse method")
+        return float(np.mean(a)), float(np.mean(t))
+    # energy-weight mean (weight highs a bit)
+    w = 1.0 + np.linspace(0, 1, a.size)
+    w /= w.sum()
+    return float((a * w).sum()), float((t * w).sum())
+
+# Simple presets mapping element role -> material name
+PRESETS: Dict[str, List[str]] = {
+    "Small office": ["Carpet (on pad)", "Gypsum board", "Glass", "Concrete"],
+    "Lecture hall": ["Concrete", "Acoustic tile", "Gypsum board", "Carpet (on pad)"],
+    "Stairwell":    ["Concrete", "Brick", "Glass", "Concrete"],
+}

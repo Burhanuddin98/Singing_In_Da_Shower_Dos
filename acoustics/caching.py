@@ -1,9 +1,12 @@
 # acoustics/caching.py
 from __future__ import annotations
 from typing import List, Tuple, Optional
-import hashlib
-import numpy as np
-import streamlit as st
+import hashlib, numpy as np, streamlit as st
+from .config import SimConfig, MaterialAuto, OCTAVE_CENTERS
+from .geometry import Intersector, face_connected_components
+from .tracing import Scene, path_trace, trace_preview_paths
+from .bands import standard_centers
+
 
 try:
     import trimesh
@@ -67,6 +70,17 @@ def _expand_broadband_to_bands(alpha_face: np.ndarray, tau_face: np.ndarray, ban
 
 # ------------ Main cached tracer ------------
 
+from __future__ import annotations
+from typing import List, Tuple, Optional
+import hashlib, numpy as np, streamlit as st
+from .config import SimConfig, MaterialAuto, OCTAVE_CENTERS
+from .geometry import Intersector, face_connected_components
+from .tracing import Scene, path_trace, trace_preview_paths
+from .bands import standard_centers
+# NOTE: keep your other helpers (hashing, auto_alpha, etc.)
+
+# ... (unchanged helpers above) ...
+
 @st.cache_data(show_spinner=True)
 def trace_cached(
     cfg_key: tuple,
@@ -80,52 +94,41 @@ def trace_cached(
     bands_override: Optional[List[float]]       = None,
     scatter_face_b_override: Optional[np.ndarray] = None,
 ):
-    """
-    Cached high-level wrapper that:
-      - builds the intersector
-      - prepares per-band material arrays
-      - runs the tracer
-      - produces a small set of preview polylines
-
-    Returns (h, arrivals, polylines)
-      h: (N,) for broadband or (B, N) for banded
-    """
-    # Rebuild SimConfig from cfg_key (field order must match SimConfig definition)
     cfg = SimConfig(*cfg_key)
 
-    # Mesh / intersector
     inter = build_intersector_cached(mesh_hash_from_arrays(V, F), V, F)
-    mesh = _build_trimesh(V, F)
+    import trimesh as _tm
+    mesh = _tm.Trimesh(vertices=np.asarray(V), faces=np.asarray(F), process=False)
 
-    # Decide bands
-    if band_mode == "octave":
-        bands = list(bands_override) if (bands_override is not None) else list(OCTAVE_CENTERS)
-        if alpha_face_b_override is not None and tau_face_b_override is not None:
-            A_b = np.asarray(alpha_face_b_override, dtype=np.float32)
-            T_b = np.asarray(tau_face_b_override, dtype=np.float32)
-        else:
-            A_b, T_b = _expand_broadband_to_bands(alpha_face, tau_face, bands)
+    # Choose band centers
+    if bands_override is not None:
+        bands = list(bands_override)
     else:
-        # broadband → just one "band" to keep the math unified
-        bands = [1000.0]
-        A_b, T_b = _expand_broadband_to_bands(alpha_face, tau_face, bands)
+        bands = list(standard_centers(band_mode))
 
-    # Scene
+    # Build per-face per-band α/τ
+    if alpha_face_b_override is not None and tau_face_b_override is not None:
+        A_b = np.asarray(alpha_face_b_override, dtype=np.float32)
+        T_b = np.asarray(tau_face_b_override, dtype=np.float32)
+    else:
+        # broadcast broadband → bands
+        nb = len(bands)
+        A_b = np.tile(np.asarray(alpha_face, np.float32)[:, None], (1, nb))
+        T_b = np.tile(np.asarray(tau_face, np.float32)[:, None],   (1, nb))
+
     scene = Scene(
         mesh=mesh,
-        S=np.asarray(S, dtype=float),
-        R=np.asarray(R, dtype=float),
+        S=np.asarray(S, float),
+        R=np.asarray(R, float),
         inter=inter,
         alpha_face_b=A_b,
         tau_face_b=T_b,
         bands=bands,
-        scatter_face_b=np.asarray(scatter_face_b_override, dtype=np.float32) if scatter_face_b_override is not None else None,
+        scatter_face_b=np.asarray(scatter_face_b_override, np.float32) if scatter_face_b_override is not None else None,
     )
 
-    # Trace
     h, arrivals = path_trace(scene, cfg)
 
-    # Quick polyline preview (bounded count)
-    polylines, _ = trace_preview_paths(scene, int(cfg.max_bounces), min(300, 3 * 50), int(cfg.rng_seed) + 1234, float(cfg.scattering_deg))
-
+    polylines, _ = trace_preview_paths(scene, int(cfg.max_bounces), min(300, 150), int(cfg.rng_seed)+1234, float(cfg.scattering_deg))
     return h, arrivals, polylines
+

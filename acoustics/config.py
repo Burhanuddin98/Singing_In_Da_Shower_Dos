@@ -46,7 +46,7 @@ class SimConfig:
 
     # === Advanced (ODEON-ish) controls ===
     phys_normalization: bool = False      # unbiased MC estimator
-    band_mode: str = "broadband"          # "broadband" | "octave"
+    band_mode: str = "broadband"   # "broadband" | "octave" | "third" | "twelfth"
     brdf_model: str = "specular+jitter"   # "specular+jitter" | "spec+lambert"
     scatter_ratio: float = 0.0            # used if no per-face scatter map provided
     transmission_paths: bool = False      # (stub: on hit, could spawn a transmit ray)

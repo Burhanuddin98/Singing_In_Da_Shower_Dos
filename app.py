@@ -1,4 +1,5 @@
 from __future__ import annotations
+from acoustics.bands import standard_centers
 
 # --- Optional banded materials (library) ---
 from acoustics.materials import builtin_library, to_broadband
@@ -157,7 +158,8 @@ def main():
             nee_prob        = st.slider("NEE probability after N (per bounce)", 0.0, 1.0, 0.30, 0.05)
 
             phys_normalization = st.checkbox("Physically normalized (MC unbiased)", value=False)
-            band_mode = st.selectbox("Band mode", ["broadband", "octave"], index=0)
+            band_mode = st.selectbox("Band mode", ["broadband", "octave", "third", "twelfth"], index=0)
+
             brdf_model = st.selectbox("BRDF model", ["specular+jitter", "spec+lambert"], index=0)
             scatter_ratio = st.slider("Scatter ratio (Lambert share)", 0.0, 1.0, 0.0, 0.05,
                                       help="Only used if BRDF is spec+lambert")
@@ -216,22 +218,25 @@ def main():
     faces_count = np.array([c.size for c in components], dtype=int)
     alpha_init = np.array([float(np.median(alpha_auto[c])) if c.size else alpha_default for c in components], dtype=float)
 
-    # ===== Per-element materials (α and τ) =====
+    # ===== Per-element materials (α, τ, scatter) =====
     st.subheader("Per-element materials")
 
-    # Define use_lib here (NOT in sidebar)
     use_lib = st.checkbox(
-        "Use library materials (octave bands) per element",
+        "Use library materials (banded) per element",
         value=False,
         help="Overrides the numeric α/τ table below when ON."
     )
 
-    lib = builtin_library(OCTAVE_CENTERS)
+    lib = builtin_library()           # native tables (octave in our stub)
     lib_names = list(lib.keys())
+    dst_freqs = standard_centers(band_mode)  # <-- current active bands
+
+    if use_lib and band_mode == "broadband":
+        st.info("Library is banded; switch Band mode to 'octave', 'third', or 'twelfth' for realistic results.")
 
     # Build the library assignment UI if enabled
     if use_lib:
-        st.caption("Assign a library material to each element. α/τ per-band will be used for tracing (octave mode recommended).")
+        st.caption("Assign a library material to each element. α/τ/scatter per-band will be used for tracing.")
         mat_choices = []
         for gid, count in zip(group_ids, faces_count):
             sel = st.selectbox(
@@ -241,6 +246,7 @@ def main():
                 key=f"lib_{int(gid)}"
             )
             mat_choices.append(sel)
+
 
     # Always show the numeric table (still useful for preview/broadband)
     base_rows = [{"Element ID": int(g), "Faces": int(c), "α (absorption)": float(a), "τ (transmission)": 0.00}
@@ -268,21 +274,30 @@ def main():
             tau_face[faces_idx]   = float(tau_group[gi])
         alpha_face_b_override = None
         tau_face_b_override = None
+        scatter_face_b_override = None
         bands_override = None
     else:
         # Library path → per-band arrays (F x B) + broadband preview fill
-        B = len(OCTAVE_CENTERS)
-        alpha_face_b_override = np.zeros((len(F), B), dtype=np.float32)
-        tau_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
+        B = len(dst_freqs)
+        alpha_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
+        tau_face_b_override     = np.zeros((len(F), B), dtype=np.float32)
+        scatter_face_b_override = np.zeros((len(F), B), dtype=np.float32)
 
         for gi, faces_idx in enumerate(components):
-            mb = lib[mat_choices[gi]]
-            alpha_face_b_override[faces_idx, :] = mb.alpha[None, :]
-            tau_face_b_override[faces_idx,   :] = mb.tau[None, :]
-            a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
+            # Resample library material to the active bands
+            m_native = lib[mat_choices[gi]]
+            m = m_native.to_bands(dst_freqs)      # alpha, tau, scatter now at dst_freqs
+            alpha_face_b_override[faces_idx, :]   = m.alpha[None, :]
+            tau_face_b_override[faces_idx,   :]   = m.tau[None, :]
+            scatter_face_b_override[faces_idx, :] = m.scatter[None, :]
+
+            # Broadband collapse for preview / legacy pieces
+            a_bb, t_bb = to_broadband(m.alpha, m.tau, method="mean")
             alpha_face[faces_idx] = a_bb
             tau_face[faces_idx]   = t_bb
-        bands_override = OCTAVE_CENTERS
+
+        bands_override = dst_freqs  # ensure tracer uses same list
+
 
     # Positions
     S = np.array([Sx, Sy, Sz], dtype=float); R = np.array([Rx, Ry, Rz], dtype=float)
@@ -343,6 +358,7 @@ def main():
         phys_normalization=bool(phys_normalization),
         band_mode=str(band_mode),
         brdf_model=str(brdf_model),
+
         scatter_ratio=float(scatter_ratio),
         transmission_paths=bool(transmission_paths),
         nee_mis=bool(nee_mis),
@@ -365,8 +381,10 @@ def main():
             band_mode=str(band_mode),
             alpha_face_b_override=alpha_face_b_override,
             tau_face_b_override=tau_face_b_override,
-            bands_override=bands_override
+            bands_override=bands_override,
+            scatter_face_b_override=scatter_face_b_override,
         )
+
         st.session_state.update({
             "h": h, "arrivals": arrivals, "polylines": polylines, "V": V, "F": F, "S": S, "R": R,
             "edge_cap": int(edge_cap), "mesh_opacity": float(mesh_opacity), "sim_sig": sim_sig,
