@@ -2,7 +2,9 @@ from __future__ import annotations
 from acoustics.bands import standard_centers
 
 # --- Optional banded materials (library) ---
-from acoustics.materials import builtin_library, to_broadband
+from acoustics.materials import (
+    builtin_library, load_csv_library, load_json_library, merge_libraries, to_broadband
+)
 from acoustics.config import OCTAVE_CENTERS
 
 import trimesh
@@ -162,6 +164,15 @@ def main():
             phys_normalization = st.checkbox("Physically normalized (MC unbiased)", value=False)
             band_mode = st.selectbox("Band mode", ["broadband", "octave", "third", "twelfth"], index=0)
 
+            # Build band centers + libraries for this run
+            centers = list(standard_centers(band_mode))
+            lib_builtin = builtin_library(centers)
+            lib_csv  = load_csv_library("./materials/library.csv", centers)   # optional
+            lib_json = load_json_library("./materials/library.json", centers) # optional
+            lib = merge_libraries(lib_builtin, lib_csv, lib_json)
+            lib_names = sorted(list(lib.keys()))
+
+
             brdf_model = st.selectbox("BRDF model", ["specular+jitter", "spec+lambert"], index=0)
             scatter_ratio = st.slider("Scatter ratio (Lambert share)", 0.0, 1.0, 0.0, 0.05,
                                       help="Only used if BRDF is spec+lambert")
@@ -220,117 +231,131 @@ def main():
     faces_count = np.array([c.size for c in components], dtype=int)
     alpha_init = np.array([float(np.median(alpha_auto[c])) if c.size else alpha_default for c in components], dtype=float)
 
-    # ===== Per-element materials (α, τ, scatter) =====
+    # ===== Per-element materials (α and τ) =====
     st.subheader("Per-element materials")
 
-    # ===== Tabs to avoid flooding the main UI =====
-    scene_tab, materials_tab, results_tab, audio_tab = st.tabs(
-        ["Scene", "Materials", "IR/EDC", "Audio"]
+    # A) Toggle: use banded library, or numeric broadband table
+    use_lib = st.checkbox(
+        "Use library materials (banded) per element",
+        value=False,
+        help="When ON, per-band α/τ (and scatter if available) are used from the material library."
     )
 
-    # Keep variables we’ll fill in the Materials tab
-    alpha_face = None
-    tau_face = None
+    # (Always) numeric table for quick broadband preview / fallback
+    base_rows = [{"Element ID": int(g), "Faces": int(c),
+                "α (absorption)": float(a), "τ (transmission)": 0.00}
+                for g, c, a in zip(group_ids, faces_count, alpha_init)]
+    table = st.data_editor(base_rows, hide_index=True, num_rows="fixed", key="mat_table")
+
+    alpha_group = np.array([float(row["α (absorption)"]) for row in table], dtype=float)
+    tau_group   = np.array([float(row["τ (transmission)"]) for row in table], dtype=float)
+    sum_gt = alpha_group + tau_group
+    clamp_mask = sum_gt > 0.99
+    if np.any(clamp_mask):
+        scale_f = 0.99 / np.maximum(sum_gt, 1e-12)
+        alpha_group *= scale_f; tau_group *= scale_f
+        st.warning(f"{int(clamp_mask.sum())} elements had α+τ > 1 and were scaled to keep α+τ ≤ 0.99.")
+    alpha_group = np.clip(alpha_group, 0.0, 0.99)
+    tau_group   = np.clip(tau_group, 0.0, 0.99 - alpha_group)
+
+    # Per-face broadband arrays (always filled)
+    alpha_face = np.full(len(F), float(alpha_default), dtype=np.float32)
+    tau_face   = np.zeros(len(F), dtype=np.float32)
+
+    # Pre-define override arrays for tracing (or None)
     alpha_face_b_override = None
-    tau_face_b_override = None
-    bands_override = None
+    tau_face_b_override   = None
     scatter_face_b_override = None
+    bands_override = None
 
+    if not use_lib:
+        # numeric editor → per-face broadband values
+        for gi, faces_idx in enumerate(components):
+            alpha_face[faces_idx] = float(alpha_group[gi])
+            tau_face[faces_idx]   = float(tau_group[gi])
+    else:
+        # -------- Library assignment UI (paged + bulk) --------
+        st.caption("Assign library materials to elements. The library is banded; switch band mode to octave/third/twelfth to change centers.")
+        page_size = 25
+        total_pages = max(1, int(np.ceil(len(group_ids)/page_size)))
+        cols_top = st.columns([2,2,2,2])
+        with cols_top[0]:
+            page = st.number_input("Page", 1, total_pages, 1, 1)
+        with cols_top[1]:
+            default_mat = st.selectbox("Default material", lib_names,
+                                    index=lib_names.index("Concrete") if "Concrete" in lib_names else 0)
+        with cols_top[2]:
+            if st.button("Apply default to ALL elements"):
+                for gid in group_ids:
+                    st.session_state[f"lib_{int(gid)}"] = default_mat
+        with cols_top[3]:
+            st.caption(f"{len(group_ids)} elements · {len(centers)} bands")
 
-    with materials_tab:
-        st.subheader("Per-element materials")
+        start = (page-1)*page_size
+        stop  = min(len(group_ids), start+page_size)
 
-        # --- Library hook ---
-        lib = builtin_library(OCTAVE_CENTERS)
-        lib_names = list(lib.keys())
-        default_mat_name = "Concrete" if "Concrete" in lib_names else lib_names[0]
+        # Header row
+        hcols = st.columns([1,2,4])
+        hcols[0].markdown("**ID**")
+        hcols[1].markdown("**Faces**")
+        hcols[2].markdown("**Material (banded)**")
 
-        st.caption("Choose whether to assign **banded** library materials or use broadband sliders/table.")
-        use_lib = st.checkbox(
-            "Use library materials (octave bands) per element",
-            value=False,
-            help="Overrides the numeric α/τ table when ON. Recommended with Band mode = 'octave' (sidebar → Advanced)."
-        )
-
-        # ---- Pagination (large meshes) ----
-        page_size = st.slider("Rows per page", 10, 200, 30, 10)
-        num_elems = int(len(group_ids))
-        num_pages = max(1, (num_elems + page_size - 1) // page_size)
-        page = st.number_input("Page", min_value=1, max_value=num_pages, value=1, step=1)
-        lo = (page - 1) * page_size
-        hi = min(num_elems, lo + page_size)
-
-        # ---- Build the editor table for the current page ----
-        base_rows = []
-        for g, c, a in zip(group_ids[lo:hi], faces_count[lo:hi], alpha_init[lo:hi]):
-            base_rows.append({
-                "Element ID": int(g),
-                "Faces": int(c),
-                "Material": default_mat_name,
-                "α (absorption)": float(a),
-                "τ (transmission)": 0.00,
-            })
-
-        # Column config: make Material a dropdown
-        colcfg = {
-            "Element ID": st.column_config.NumberColumn(disabled=True),
-            "Faces": st.column_config.NumberColumn(disabled=True),
-            "Material": st.column_config.SelectboxColumn(
-                "Material",
-                options=lib_names,
-                required=True,
-                help="Banded (octaves) material from library"
-            ),
-            "α (absorption)": st.column_config.NumberColumn(min_value=0.0, max_value=0.99, step=0.01),
-            "τ (transmission)": st.column_config.NumberColumn(min_value=0.0, max_value=0.99, step=0.01),
-        }
-
-        edited = st.data_editor(
-            base_rows,
-            hide_index=True,
-            num_rows="fixed",
-            column_config=colcfg if use_lib else None,
-            key=f"mat_editor_page_{page}",
-            use_container_width=True,
-        )
-
-        # ---- Bulk apply helpers ----
-        st.markdown("**Bulk assign**")
-        colA, colB = st.columns([2,1])
-        with colA:
-            bulk_ids = st.multiselect(
-                "Pick element IDs to assign",
-                options=list(map(int, group_ids)),
-                default=[],
-                help="You can paste a comma-separated list too."
+        # Row widgets (paged)
+        for i in range(start, stop):
+            gid = int(group_ids[i]); count = int(faces_count[i])
+            rcols = st.columns([1,2,4])
+            rcols[0].write(gid)
+            rcols[1].write(count)
+            current = st.session_state.get(f"lib_{gid}", default_mat)
+            st.session_state[f"lib_{gid}"] = rcols[2].selectbox(
+                f"Element {gid}", lib_names,
+                index=lib_names.index(current) if current in lib_names else 0,
+                key=f"lib_{gid}_sb",
+                label_visibility="collapsed"
             )
-        with colB:
-            bulk_material = st.selectbox("Material to apply", lib_names, index=lib_names.index(default_mat_name))
-            if st.button("Apply to selected"):
-                # Save the selection to session for this run; propagated below when building arrays
-                st.session_state["bulk_assign"] = {"ids": set(map(int, bulk_ids)), "mat": bulk_material}
-                st.success(f"Assigned {bulk_material} to {len(bulk_ids)} elements (will apply on Run/Update).")
-            else:
-                st.session_state["bulk_assign"] = st.session_state.get("bulk_assign", None)
 
-        # ---- Material Inspector (per-band view & chart) ----
-        st.markdown("---")
-        st.subheader("Material Inspector (bandwise)")
-        mat_to_inspect = st.selectbox("Inspect material", lib_names, index=lib_names.index(default_mat_name))
-        m = lib[mat_to_inspect]
-        insp_df = {
-            "Center (Hz)": OCTAVE_CENTERS,
-            "α": [float(x) for x in m.alpha],
-            "τ": [float(x) for x in m.tau],
-            "s (scatter)": [float(x) for x in getattr(m, "scatter", np.zeros_like(m.alpha))],
-        }
-        st.dataframe(insp_df, use_container_width=True)
-        # Simple band bar chart for α and τ
-        fig_mat = go.Figure()
-        fig_mat.add_bar(x=OCTAVE_CENTERS, y=insp_df["α"], name="α (absorption)")
-        fig_mat.add_bar(x=OCTAVE_CENTERS, y=insp_df["τ"], name="τ (transmission)")
-        fig_mat.update_layout(barmode="group", height=280, margin=dict(l=10,r=10,t=30,b=10))
-        st.plotly_chart(fig_mat, use_container_width=True)
+        # Build banded overrides + also fill broadband preview arrays
+        B = len(centers)
+        alpha_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
+        tau_face_b_override     = np.zeros((len(F), B), dtype=np.float32)
+        scatter_face_b_override = np.zeros((len(F), B), dtype=np.float32)
+
+        for gi, faces_idx in enumerate(components):
+            gid = int(group_ids[gi])
+            mat_name = st.session_state.get(f"lib_{gid}", default_mat)
+            mb = lib[mat_name]
+            alpha_face_b_override[faces_idx, :]   = mb.alpha[None, :]
+            tau_face_b_override[faces_idx,   :]   = mb.tau[None, :]
+            if mb.scatter is not None:
+                scatter_face_b_override[faces_idx, :] = mb.scatter[None, :]
+            # Broadband preview (mean)
+            a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
+            alpha_face[faces_idx] = a_bb
+            tau_face[faces_idx]   = t_bb
+
+        bands_override = centers
+
+    # -------- Material inspector (bandwise plots) --------
+    with st.expander("Material Inspector (bandwise)"):
+        if len(lib_names):
+            mat_name = st.selectbox("Material", lib_names,
+                                    index=lib_names.index("Concrete") if "Concrete" in lib_names else 0)
+            mb = lib[mat_name]
+            cols_i = st.columns(3)
+            series = [
+                ("α (absorption)", mb.alpha),
+                ("τ (transmission)", mb.tau),
+                ("s (scatter)", mb.scatter if mb.scatter is not None else np.zeros_like(mb.alpha)),
+            ]
+            for j, (title, arr) in enumerate(series):
+                with cols_i[j]:
+                    figm = go.Figure(go.Scatter(x=mb.centers, y=arr, mode="lines+markers"))
+                    figm.update_layout(height=220, margin=dict(l=10,r=10,t=30,b=10),
+                                    title=title, xaxis_type="log",
+                                    paper_bgcolor="#000", plot_bgcolor="#000",
+                                    font=dict(color="#e6edf3"))
+                    st.plotly_chart(figm, use_container_width=True)
+
 
         # ---- Build final per-face arrays (broadband always; banded optionally) ----
         # 1) base broadband from editor (or defaults)
