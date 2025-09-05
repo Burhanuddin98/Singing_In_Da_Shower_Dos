@@ -241,15 +241,39 @@ def main():
         help="When ON, per-band α/τ (and scatter if available) are used from the material library."
     )
 
-    # (Always) numeric table for quick broadband preview / fallback
-    base_rows = [{"Element ID": int(g), "Faces": int(c),
-                "α (absorption)": float(a), "τ (transmission)": 0.00}
-                for g, c, a in zip(group_ids, faces_count, alpha_init)]
-    table = st.data_editor(base_rows, hide_index=True, num_rows="fixed", key="mat_table")
+    # Always show the numeric table (still useful for preview/broadband)
+    base_rows = [
+        {"Element ID": int(g), "Faces": int(c), "α (absorption)": float(a), "τ (transmission)": 0.00}
+        for g, c, a in zip(group_ids, faces_count, alpha_init)
+    ]
+    df = st.data_editor(
+        base_rows,
+        hide_index=True,
+        num_rows="fixed",
+        key="mat_table"
+    )
 
-    alpha_group = np.array([float(row["α (absorption)"]) for row in table], dtype=float)
-    tau_group   = np.array([float(row["τ (transmission)"]) for row in table], dtype=float)
+    # Ensure proper dtypes even if user leaves blanks
+    if df.empty:
+        st.stop()
+
+    # Pull numpy arrays from columns
+    alpha_group = df["α (absorption)"].astype(float).to_numpy()
+    tau_group   = df["τ (transmission)"].astype(float).to_numpy()
+    faces_count = df["Faces"].astype(int).to_numpy()
+    group_ids   = df["Element ID"].astype(int).to_numpy()
+
+    # Clamp and renormalize if needed
     sum_gt = alpha_group + tau_group
+    clamp_mask = sum_gt > 0.99
+    if np.any(clamp_mask):
+        scale_f = 0.99 / np.maximum(sum_gt, 1e-12)
+        alpha_group *= scale_f
+        tau_group   *= scale_f
+        st.warning(f"{int(clamp_mask.sum())} elements had α+τ > 1 and were scaled to keep α+τ ≤ 0.99.")
+    alpha_group = np.clip(alpha_group, 0.0, 0.99)
+    tau_group   = np.clip(tau_group, 0.0, 0.99 - alpha_group)
+
     clamp_mask = sum_gt > 0.99
     if np.any(clamp_mask):
         scale_f = 0.99 / np.maximum(sum_gt, 1e-12)
@@ -262,11 +286,20 @@ def main():
     alpha_face = np.full(len(F), float(alpha_default), dtype=np.float32)
     tau_face   = np.zeros(len(F), dtype=np.float32)
 
-    # Pre-define override arrays for tracing (or None)
-    alpha_face_b_override = None
-    tau_face_b_override   = None
-    scatter_face_b_override = None
-    bands_override = None
+    if not use_lib:
+        # numeric editor → per-face arrays
+        for gi, faces_idx in enumerate(components):
+            alpha_face[faces_idx] = float(alpha_group[gi])
+            tau_face[faces_idx]   = float(tau_group[gi])
+        alpha_face_b_override = None
+        tau_face_b_override   = None
+        bands_override        = None
+    else:
+        # Pre-define override arrays for tracing (or None)
+        alpha_face_b_override = None
+        tau_face_b_override   = None
+        scatter_face_b_override = None
+        bands_override = None
 
     if not use_lib:
         # numeric editor → per-face broadband values
