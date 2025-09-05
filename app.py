@@ -377,9 +377,13 @@ def main():
 
     # -------- Material inspector (bandwise plots) --------
     with st.expander("Material Inspector (bandwise)"):
+        # This block is READ-ONLY: it only plots curves from the loaded library.
         if 'lib_names' in locals() and len(lib_names):
-            mat_name = st.selectbox("Material", lib_names,
-                                    index=lib_names.index("Concrete") if "Concrete" in lib_names else 0)
+            mat_name = st.selectbox(
+                "Material",
+                lib_names,
+                index=lib_names.index("Concrete") if "Concrete" in lib_names else 0,
+            )
             mb = lib[mat_name]
             cols_i = st.columns(3)
             series = [
@@ -389,103 +393,20 @@ def main():
             ]
             for j, (title, arr) in enumerate(series):
                 with cols_i[j]:
-                    figm = go.Figure(go.Scatter(x=mb.centers, y=arr, mode="lines+markers"))
-                    figm.update_layout(height=220, margin=dict(l=10,r=10,t=30,b=10),
-                                    title=title, xaxis_type="log",
-                                    paper_bgcolor="#000", plot_bgcolor="#000",
-                                    font=dict(color="#e6edf3"))
+                    figm = go.Figure(go.Scatter(x=mb.centers, y=np.asarray(arr, float), mode="lines+markers"))
+                    figm.update_layout(
+                        height=220,
+                        margin=dict(l=10, r=10, t=30, b=10),
+                        title=title,
+                        xaxis_type="log",
+                        paper_bgcolor="#000",
+                        plot_bgcolor="#000",
+                        font=dict(color="#e6edf3"),
+                    )
                     st.plotly_chart(figm, use_container_width=True)
         else:
             st.info("Turn on library materials and/or load a library to inspect band curves here.")
-
-
-
-        # ---- Build final per-face arrays (broadband always; banded optionally) ----
-        # 1) base broadband from editor (or defaults)
-        alpha_group = np.array([float(row["α (absorption)"]) for row in edited], dtype=float)
-        tau_group   = np.array([float(row["τ (transmission)"]) for row in edited], dtype=float)
-
-        # Clamp α+τ ≤ 0.99 (page subset only; full clamp applied when we expand to faces)
-        sum_gt = alpha_group + tau_group
-        if np.any(sum_gt > 0.99):
-            scale_f = 0.99 / np.maximum(sum_gt, 1e-12)
-            alpha_group *= scale_f
-            tau_group   *= scale_f
-            st.warning("Some rows had α+τ > 0.99 and were scaled.")
-
-        # Start with whole-mesh broadband arrays
-        alpha_face = np.full(len(F), float(alpha_default), dtype=np.float32)
-        tau_face   = np.zeros(len(F), dtype=np.float32)
-
-        # Apply current page’s broadband edits
-        for row, g in zip(edited, group_ids[lo:hi]):
-            gi = int(g)
-            a = float(row["α (absorption)"])
-            t = float(row["τ (transmission)"])
-            # Clamp per element to keep α+τ ≤ 0.99
-            if a + t > 0.99:
-                s = 0.99 / (a + t + 1e-12)
-                a *= s; t *= s
-            alpha_face[components[gi]] = a
-            tau_face[components[gi]] = t
-
-        # Apply bulk assign (library path) if any
-        bulk = st.session_state.get("bulk_assign")
-        if use_lib and bulk:
-            for gi in bulk["ids"]:
-                if int(gi) < len(components):
-                    mb = lib[bulk["mat"]]
-                    a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
-                    alpha_face[components[int(gi)]] = a_bb
-                    tau_face[components[int(gi)]]   = t_bb
-
-        # 2) Library band overrides if enabled
-        if use_lib:
-            bands_override = OCTAVE_CENTERS
-            B = len(bands_override)
-            alpha_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
-            tau_face_b_override     = np.zeros((len(F), B), dtype=np.float32)
-            scatter_face_b_override = np.zeros((len(F), B), dtype=np.float32)  # new
-
-
-            # First: fill from current page’s “Material” column
-            for row, g in zip(edited, group_ids[lo:hi]):
-                gi = int(g)
-                mat_name = row["Material"]
-                mb = lib[mat_name]
-                alpha_face_b_override[components[gi], :]   = mb.alpha[None, :]
-                tau_face_b_override[components[gi],   :]   = mb.tau[None, :]
-                # scatter is optional in some libraries; default 0 if missing
-                m_scatter = getattr(mb, "scatter", np.zeros_like(mb.alpha, dtype=np.float32))
-                scatter_face_b_override[components[gi], :] = m_scatter[None, :]
-
-                a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
-                alpha_face[components[gi]] = a_bb
-                tau_face[components[gi]]   = t_bb
-
-                m_scatter = getattr(mb, "scatter", np.zeros_like(mb.alpha, dtype=np.float32))
-                scatter_face_b_override[components[int(gi)], :] = m_scatter[None, :]
-
-
-
-            # Then apply bulk (overrides page)
-            if bulk:
-                for gi in bulk["ids"]:
-                    if int(gi) < len(components):
-                        mb = lib[bulk["mat"]]
-                        alpha_face_b_override[components[int(gi)], :] = mb.alpha[None, :]
-                        tau_face_b_override[components[int(gi)],   :] = mb.tau[None, :]
-                        a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
-                        alpha_face[components[int(gi)]] = a_bb
-                        tau_face[components[int(gi)]]   = t_bb
-        else:
-            alpha_face_b_override = None
-            tau_face_b_override = None
-            bands_override = None
-
-        st.caption("Tip: change band mode in the sidebar → Advanced. Use ‘octave’ to trace with the library bands.")
-
-
+            
     # Positions
     S = np.array([Sx, Sy, Sz], dtype=float); R = np.array([Rx, Ry, Rz], dtype=float)
 
