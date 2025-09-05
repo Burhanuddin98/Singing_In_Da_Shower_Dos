@@ -234,6 +234,8 @@ def main():
     alpha_face_b_override = None
     tau_face_b_override = None
     bands_override = None
+    scatter_face_b_override = None
+
 
     with materials_tab:
         st.subheader("Per-element materials")
@@ -373,20 +375,30 @@ def main():
         if use_lib:
             bands_override = OCTAVE_CENTERS
             B = len(bands_override)
-            alpha_face_b_override = np.zeros((len(F), B), dtype=np.float32)
-            tau_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
+            alpha_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
+            tau_face_b_override     = np.zeros((len(F), B), dtype=np.float32)
+            scatter_face_b_override = np.zeros((len(F), B), dtype=np.float32)  # new
+
 
             # First: fill from current page’s “Material” column
             for row, g in zip(edited, group_ids[lo:hi]):
                 gi = int(g)
                 mat_name = row["Material"]
                 mb = lib[mat_name]
-                alpha_face_b_override[components[gi], :] = mb.alpha[None, :]
-                tau_face_b_override[components[gi],   :] = mb.tau[None, :]
-                # keep broadband mirror for preview/legacy
+                alpha_face_b_override[components[gi], :]   = mb.alpha[None, :]
+                tau_face_b_override[components[gi],   :]   = mb.tau[None, :]
+                # scatter is optional in some libraries; default 0 if missing
+                m_scatter = getattr(mb, "scatter", np.zeros_like(mb.alpha, dtype=np.float32))
+                scatter_face_b_override[components[gi], :] = m_scatter[None, :]
+
                 a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
                 alpha_face[components[gi]] = a_bb
                 tau_face[components[gi]]   = t_bb
+
+                m_scatter = getattr(mb, "scatter", np.zeros_like(mb.alpha, dtype=np.float32))
+                scatter_face_b_override[components[int(gi)], :] = m_scatter[None, :]
+
+
 
             # Then apply bulk (overrides page)
             if bulk:
@@ -482,15 +494,27 @@ def main():
     # --- Run simulation ---
     run_clicked = run
     if run_clicked:
-        h, arrivals, polylines = trace_cached(
-            cfg_key, V, F, S, R,
-            alpha_face.copy(), tau_face.copy(),
-            band_mode=str(band_mode),
-            alpha_face_b_override=alpha_face_b_override,
-            tau_face_b_override=tau_face_b_override,
-            bands_override=bands_override,
-            scatter_face_b_override=scatter_face_b_override,
-        )
+        try:
+            h, arrivals, polylines = trace_cached(
+                cfg_key, V, F, S, R,
+                alpha_face.copy(), tau_face.copy(),
+                band_mode=str(band_mode),
+                alpha_face_b_override=alpha_face_b_override,
+                tau_face_b_override=tau_face_b_override,
+                bands_override=bands_override,
+                scatter_face_b_override=scatter_face_b_override,
+            )
+        except TypeError:
+            # Back-end may not yet support scatter override; fall back gracefully
+            h, arrivals, polylines = trace_cached(
+                cfg_key, V, F, S, R,
+                alpha_face.copy(), tau_face.copy(),
+                band_mode=str(band_mode),
+                alpha_face_b_override=alpha_face_b_override,
+                tau_face_b_override=tau_face_b_override,
+                bands_override=bands_override,
+            )
+
 
         st.session_state.update({
             "h": h, "arrivals": arrivals, "polylines": polylines, "V": V, "F": F, "S": S, "R": R,
