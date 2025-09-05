@@ -223,82 +223,187 @@ def main():
     # ===== Per-element materials (α, τ, scatter) =====
     st.subheader("Per-element materials")
 
-    use_lib = st.checkbox(
-        "Use library materials (banded) per element",
-        value=False,
-        help="Overrides the numeric α/τ table below when ON."
+    # ===== Tabs to avoid flooding the main UI =====
+    scene_tab, materials_tab, results_tab, audio_tab = st.tabs(
+        ["Scene", "Materials", "IR/EDC", "Audio"]
     )
 
-    lib = builtin_library()           # native tables (octave in our stub)
-    lib_names = list(lib.keys())
-    dst_freqs = standard_centers(band_mode)  # <-- current active bands
+    # Keep variables we’ll fill in the Materials tab
+    alpha_face = None
+    tau_face = None
+    alpha_face_b_override = None
+    tau_face_b_override = None
+    bands_override = None
 
-    if use_lib and band_mode == "broadband":
-        st.info("Library is banded; switch Band mode to 'octave', 'third', or 'twelfth' for realistic results.")
+    with materials_tab:
+        st.subheader("Per-element materials")
 
-    # Build the library assignment UI if enabled
-    if use_lib:
-        st.caption("Assign a library material to each element. α/τ/scatter per-band will be used for tracing.")
-        mat_choices = []
-        for gid, count in zip(group_ids, faces_count):
-            sel = st.selectbox(
-                f"Element {int(gid)} — {int(count)} faces",
-                lib_names,
-                index=lib_names.index("Concrete") if "Concrete" in lib_names else 0,
-                key=f"lib_{int(gid)}"
+        # --- Library hook ---
+        lib = builtin_library(OCTAVE_CENTERS)
+        lib_names = list(lib.keys())
+        default_mat_name = "Concrete" if "Concrete" in lib_names else lib_names[0]
+
+        st.caption("Choose whether to assign **banded** library materials or use broadband sliders/table.")
+        use_lib = st.checkbox(
+            "Use library materials (octave bands) per element",
+            value=False,
+            help="Overrides the numeric α/τ table when ON. Recommended with Band mode = 'octave' (sidebar → Advanced)."
+        )
+
+        # ---- Pagination (large meshes) ----
+        page_size = st.slider("Rows per page", 10, 200, 30, 10)
+        num_elems = int(len(group_ids))
+        num_pages = max(1, (num_elems + page_size - 1) // page_size)
+        page = st.number_input("Page", min_value=1, max_value=num_pages, value=1, step=1)
+        lo = (page - 1) * page_size
+        hi = min(num_elems, lo + page_size)
+
+        # ---- Build the editor table for the current page ----
+        base_rows = []
+        for g, c, a in zip(group_ids[lo:hi], faces_count[lo:hi], alpha_init[lo:hi]):
+            base_rows.append({
+                "Element ID": int(g),
+                "Faces": int(c),
+                "Material": default_mat_name,
+                "α (absorption)": float(a),
+                "τ (transmission)": 0.00,
+            })
+
+        # Column config: make Material a dropdown
+        colcfg = {
+            "Element ID": st.column_config.NumberColumn(disabled=True),
+            "Faces": st.column_config.NumberColumn(disabled=True),
+            "Material": st.column_config.SelectboxColumn(
+                "Material",
+                options=lib_names,
+                required=True,
+                help="Banded (octaves) material from library"
+            ),
+            "α (absorption)": st.column_config.NumberColumn(min_value=0.0, max_value=0.99, step=0.01),
+            "τ (transmission)": st.column_config.NumberColumn(min_value=0.0, max_value=0.99, step=0.01),
+        }
+
+        edited = st.data_editor(
+            base_rows,
+            hide_index=True,
+            num_rows="fixed",
+            column_config=colcfg if use_lib else None,
+            key=f"mat_editor_page_{page}",
+            use_container_width=True,
+        )
+
+        # ---- Bulk apply helpers ----
+        st.markdown("**Bulk assign**")
+        colA, colB = st.columns([2,1])
+        with colA:
+            bulk_ids = st.multiselect(
+                "Pick element IDs to assign",
+                options=list(map(int, group_ids)),
+                default=[],
+                help="You can paste a comma-separated list too."
             )
-            mat_choices.append(sel)
+        with colB:
+            bulk_material = st.selectbox("Material to apply", lib_names, index=lib_names.index(default_mat_name))
+            if st.button("Apply to selected"):
+                # Save the selection to session for this run; propagated below when building arrays
+                st.session_state["bulk_assign"] = {"ids": set(map(int, bulk_ids)), "mat": bulk_material}
+                st.success(f"Assigned {bulk_material} to {len(bulk_ids)} elements (will apply on Run/Update).")
+            else:
+                st.session_state["bulk_assign"] = st.session_state.get("bulk_assign", None)
 
+        # ---- Material Inspector (per-band view & chart) ----
+        st.markdown("---")
+        st.subheader("Material Inspector (bandwise)")
+        mat_to_inspect = st.selectbox("Inspect material", lib_names, index=lib_names.index(default_mat_name))
+        m = lib[mat_to_inspect]
+        insp_df = {
+            "Center (Hz)": OCTAVE_CENTERS,
+            "α": [float(x) for x in m.alpha],
+            "τ": [float(x) for x in m.tau],
+            "s (scatter)": [float(x) for x in getattr(m, "scatter", np.zeros_like(m.alpha))],
+        }
+        st.dataframe(insp_df, use_container_width=True)
+        # Simple band bar chart for α and τ
+        fig_mat = go.Figure()
+        fig_mat.add_bar(x=OCTAVE_CENTERS, y=insp_df["α"], name="α (absorption)")
+        fig_mat.add_bar(x=OCTAVE_CENTERS, y=insp_df["τ"], name="τ (transmission)")
+        fig_mat.update_layout(barmode="group", height=280, margin=dict(l=10,r=10,t=30,b=10))
+        st.plotly_chart(fig_mat, use_container_width=True)
 
-    # Always show the numeric table (still useful for preview/broadband)
-    base_rows = [{"Element ID": int(g), "Faces": int(c), "α (absorption)": float(a), "τ (transmission)": 0.00}
-                 for g, c, a in zip(group_ids, faces_count, alpha_init)]
-    table = st.data_editor(base_rows, hide_index=True, num_rows="fixed", key="mat_table")
-    alpha_group = np.array([float(row["α (absorption)"]) for row in table], dtype=float)
-    tau_group = np.array([float(row["τ (transmission)"]) for row in table], dtype=float)
-    sum_gt = alpha_group + tau_group
-    clamp_mask = sum_gt > 0.99
-    if np.any(clamp_mask):
-        scale_f = 0.99 / np.maximum(sum_gt, 1e-12)
-        alpha_group *= scale_f; tau_group *= scale_f
-        st.warning(f"{int(clamp_mask.sum())} elements had α+τ > 1 and were scaled to keep α+τ ≤ 0.99.")
-    alpha_group = np.clip(alpha_group, 0.0, 0.99)
-    tau_group = np.clip(tau_group, 0.0, 0.99 - alpha_group)
+        # ---- Build final per-face arrays (broadband always; banded optionally) ----
+        # 1) base broadband from editor (or defaults)
+        alpha_group = np.array([float(row["α (absorption)"]) for row in edited], dtype=float)
+        tau_group   = np.array([float(row["τ (transmission)"]) for row in edited], dtype=float)
 
-    # Build per-face α/τ (broadband by default)
-    alpha_face = np.full(len(F), float(alpha_default), dtype=np.float32)
-    tau_face   = np.zeros(len(F), dtype=np.float32)
+        # Clamp α+τ ≤ 0.99 (page subset only; full clamp applied when we expand to faces)
+        sum_gt = alpha_group + tau_group
+        if np.any(sum_gt > 0.99):
+            scale_f = 0.99 / np.maximum(sum_gt, 1e-12)
+            alpha_group *= scale_f
+            tau_group   *= scale_f
+            st.warning("Some rows had α+τ > 0.99 and were scaled.")
 
-    if not use_lib:
-        # numeric editor → per-face arrays
-        for gi, faces_idx in enumerate(components):
-            alpha_face[faces_idx] = float(alpha_group[gi])
-            tau_face[faces_idx]   = float(tau_group[gi])
-        alpha_face_b_override = None
-        tau_face_b_override = None
-        scatter_face_b_override = None
-        bands_override = None
-    else:
-        # Library path → per-band arrays (F x B) + broadband preview fill
-        B = len(dst_freqs)
-        alpha_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
-        tau_face_b_override     = np.zeros((len(F), B), dtype=np.float32)
-        scatter_face_b_override = np.zeros((len(F), B), dtype=np.float32)
+        # Start with whole-mesh broadband arrays
+        alpha_face = np.full(len(F), float(alpha_default), dtype=np.float32)
+        tau_face   = np.zeros(len(F), dtype=np.float32)
 
-        for gi, faces_idx in enumerate(components):
-            # Resample library material to the active bands
-            m_native = lib[mat_choices[gi]]
-            m = m_native.to_bands(dst_freqs)      # alpha, tau, scatter now at dst_freqs
-            alpha_face_b_override[faces_idx, :]   = m.alpha[None, :]
-            tau_face_b_override[faces_idx,   :]   = m.tau[None, :]
-            scatter_face_b_override[faces_idx, :] = m.scatter[None, :]
+        # Apply current page’s broadband edits
+        for row, g in zip(edited, group_ids[lo:hi]):
+            gi = int(g)
+            a = float(row["α (absorption)"])
+            t = float(row["τ (transmission)"])
+            # Clamp per element to keep α+τ ≤ 0.99
+            if a + t > 0.99:
+                s = 0.99 / (a + t + 1e-12)
+                a *= s; t *= s
+            alpha_face[components[gi]] = a
+            tau_face[components[gi]] = t
 
-            # Broadband collapse for preview / legacy pieces
-            a_bb, t_bb = to_broadband(m.alpha, m.tau, method="mean")
-            alpha_face[faces_idx] = a_bb
-            tau_face[faces_idx]   = t_bb
+        # Apply bulk assign (library path) if any
+        bulk = st.session_state.get("bulk_assign")
+        if use_lib and bulk:
+            for gi in bulk["ids"]:
+                if int(gi) < len(components):
+                    mb = lib[bulk["mat"]]
+                    a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
+                    alpha_face[components[int(gi)]] = a_bb
+                    tau_face[components[int(gi)]]   = t_bb
 
-        bands_override = dst_freqs  # ensure tracer uses same list
+        # 2) Library band overrides if enabled
+        if use_lib:
+            bands_override = OCTAVE_CENTERS
+            B = len(bands_override)
+            alpha_face_b_override = np.zeros((len(F), B), dtype=np.float32)
+            tau_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
+
+            # First: fill from current page’s “Material” column
+            for row, g in zip(edited, group_ids[lo:hi]):
+                gi = int(g)
+                mat_name = row["Material"]
+                mb = lib[mat_name]
+                alpha_face_b_override[components[gi], :] = mb.alpha[None, :]
+                tau_face_b_override[components[gi],   :] = mb.tau[None, :]
+                # keep broadband mirror for preview/legacy
+                a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
+                alpha_face[components[gi]] = a_bb
+                tau_face[components[gi]]   = t_bb
+
+            # Then apply bulk (overrides page)
+            if bulk:
+                for gi in bulk["ids"]:
+                    if int(gi) < len(components):
+                        mb = lib[bulk["mat"]]
+                        alpha_face_b_override[components[int(gi)], :] = mb.alpha[None, :]
+                        tau_face_b_override[components[int(gi)],   :] = mb.tau[None, :]
+                        a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
+                        alpha_face[components[int(gi)]] = a_bb
+                        tau_face[components[int(gi)]]   = t_bb
+        else:
+            alpha_face_b_override = None
+            tau_face_b_override = None
+            bands_override = None
+
+        st.caption("Tip: change band mode in the sidebar → Advanced. Use ‘octave’ to trace with the library bands.")
 
 
     # Positions
