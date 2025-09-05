@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 from typing import Optional, Tuple, List
+import trimesh
 
 import numpy as np
 import streamlit as st
@@ -14,6 +15,11 @@ from .bands import standard_centers
 
 
 # ------------ Helpers / hashing ------------
+def _build_trimesh(V: np.ndarray, F: np.ndarray) -> "trimesh.Trimesh":
+    if trimesh is None:
+        raise RuntimeError("trimesh is not available")
+    return trimesh.Trimesh(vertices=np.asarray(V), faces=np.asarray(F), process=False)
+
 
 def mesh_hash_from_arrays(V: np.ndarray, F: np.ndarray) -> str:
     h = hashlib.sha1()

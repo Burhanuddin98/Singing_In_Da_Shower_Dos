@@ -5,6 +5,8 @@ from acoustics.bands import standard_centers
 from acoustics.materials import builtin_library, to_broadband
 from acoustics.config import OCTAVE_CENTERS
 
+import trimesh
+
 import io, os, math, hashlib, numpy as np, streamlit as st
 import plotly.graph_objects as go
 
