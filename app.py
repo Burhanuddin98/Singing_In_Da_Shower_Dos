@@ -167,11 +167,25 @@ def main():
 
             # Build band centers + libraries for this run
             centers = list(standard_centers(band_mode))
-            lib_builtin = builtin_library(centers)
-            lib_csv  = load_csv_library("./materials/library.csv", centers)   # optional
-            lib_json = load_json_library("./materials/library.json", centers) # optional
-            lib = merge_libraries(lib_builtin, lib_csv, lib_json)
+
+            # Always have a builtin baseline.
+            lib = builtin_library(centers)
+
+            # Optional external libraries (only if your acoustics.materials implements them)
+            try:
+                _csv = load_csv_library("./materials/library.csv", centers)
+                lib.update(_csv)
+            except Exception:
+                pass
+
+            try:
+                _json = load_json_library("./materials/library.json", centers)
+                lib.update(_json)
+            except Exception:
+                pass
+
             lib_names = sorted(list(lib.keys()))
+
 
 
             brdf_model = st.selectbox("BRDF model", ["specular+jitter", "spec+lambert"], index=0)
@@ -291,28 +305,16 @@ def main():
     alpha_face = np.full(len(F), float(alpha_default), dtype=np.float32)
     tau_face   = np.zeros(len(F), dtype=np.float32)
 
-    if not use_lib:
-        # numeric editor → per-face arrays
-        for gi, faces_idx in enumerate(components):
-            alpha_face[faces_idx] = float(alpha_group[gi])
-            tau_face[faces_idx]   = float(tau_group[gi])
-        alpha_face_b_override = None
-        tau_face_b_override   = None
-        bands_override        = None
-    else:
-        # Pre-define override arrays for tracing (or None)
-        alpha_face_b_override = None
-        tau_face_b_override   = None
-        scatter_face_b_override = None
-        bands_override = None
+    alpha_face_b_override = None
+    tau_face_b_override   = None
+    scatter_face_b_override = None
+    bands_override        = None
 
     if not use_lib:
-        # numeric editor → per-face broadband values
         for gi, faces_idx in enumerate(components):
             alpha_face[faces_idx] = float(alpha_group[gi])
             tau_face[faces_idx]   = float(tau_group[gi])
     else:
-        # -------- Library assignment UI (paged + bulk) --------
         st.caption("Assign library materials to elements. The library is banded; switch band mode to octave/third/twelfth to change centers.")
         page_size = 25
         total_pages = max(1, int(np.ceil(len(group_ids)/page_size)))
@@ -332,13 +334,13 @@ def main():
         start = (page-1)*page_size
         stop  = min(len(group_ids), start+page_size)
 
-        # Header row
+        # Header
         hcols = st.columns([1,2,4])
         hcols[0].markdown("**ID**")
         hcols[1].markdown("**Faces**")
         hcols[2].markdown("**Material (banded)**")
 
-        # Row widgets (paged)
+        # Rows
         for i in range(start, stop):
             gid = int(group_ids[i]); count = int(faces_count[i])
             rcols = st.columns([1,2,4])
@@ -352,7 +354,7 @@ def main():
                 label_visibility="collapsed"
             )
 
-        # Build banded overrides + also fill broadband preview arrays
+        # Build per-face banded overrides + fill broadband preview arrays
         B = len(centers)
         alpha_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
         tau_face_b_override     = np.zeros((len(F), B), dtype=np.float32)
@@ -364,7 +366,7 @@ def main():
             mb = lib[mat_name]
             alpha_face_b_override[faces_idx, :]   = mb.alpha[None, :]
             tau_face_b_override[faces_idx,   :]   = mb.tau[None, :]
-            if mb.scatter is not None:
+            if getattr(mb, "scatter", None) is not None:
                 scatter_face_b_override[faces_idx, :] = mb.scatter[None, :]
             # Broadband preview (mean)
             a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
@@ -375,7 +377,7 @@ def main():
 
     # -------- Material inspector (bandwise plots) --------
     with st.expander("Material Inspector (bandwise)"):
-        if len(lib_names):
+        if 'lib_names' in locals() and len(lib_names):
             mat_name = st.selectbox("Material", lib_names,
                                     index=lib_names.index("Concrete") if "Concrete" in lib_names else 0)
             mb = lib[mat_name]
@@ -383,7 +385,7 @@ def main():
             series = [
                 ("α (absorption)", mb.alpha),
                 ("τ (transmission)", mb.tau),
-                ("s (scatter)", mb.scatter if mb.scatter is not None else np.zeros_like(mb.alpha)),
+                ("s (scatter)", mb.scatter if getattr(mb, "scatter", None) is not None else np.zeros_like(mb.alpha)),
             ]
             for j, (title, arr) in enumerate(series):
                 with cols_i[j]:
@@ -393,6 +395,9 @@ def main():
                                     paper_bgcolor="#000", plot_bgcolor="#000",
                                     font=dict(color="#e6edf3"))
                     st.plotly_chart(figm, use_container_width=True)
+        else:
+            st.info("Turn on library materials and/or load a library to inspect band curves here.")
+
 
 
         # ---- Build final per-face arrays (broadband always; banded optionally) ----
