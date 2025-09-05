@@ -6,6 +6,7 @@ from acoustics.materials import (
     builtin_library, load_csv_library, load_json_library, merge_libraries, to_broadband
 )
 from acoustics.config import OCTAVE_CENTERS
+import pandas as pd
 
 import trimesh
 
@@ -246,18 +247,29 @@ def main():
         {"Element ID": int(g), "Faces": int(c), "α (absorption)": float(a), "τ (transmission)": 0.00}
         for g, c, a in zip(group_ids, faces_count, alpha_init)
     ]
-    df = st.data_editor(
+
+    raw_table = st.data_editor(
         base_rows,
         hide_index=True,
         num_rows="fixed",
-        key="mat_table"
+        key="mat_table",
     )
 
-    # Ensure proper dtypes even if user leaves blanks
-    if df.empty:
+    # Coerce to pandas DataFrame no matter what Streamlit returns
+    df = pd.DataFrame(raw_table)
+
+    # Validate shape / columns
+    if df is None or df.shape[0] == 0:
         st.stop()
 
-    # Pull numpy arrays from columns
+    required_cols = ["Element ID", "Faces", "α (absorption)", "τ (transmission)"]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        st.error(f"Material table is missing columns: {missing}")
+        st.stop()
+
+    # Clean & cast
+    df = df.fillna(0)
     alpha_group = df["α (absorption)"].astype(float).to_numpy()
     tau_group   = df["τ (transmission)"].astype(float).to_numpy()
     faces_count = df["Faces"].astype(int).to_numpy()
@@ -271,18 +283,11 @@ def main():
         alpha_group *= scale_f
         tau_group   *= scale_f
         st.warning(f"{int(clamp_mask.sum())} elements had α+τ > 1 and were scaled to keep α+τ ≤ 0.99.")
+
     alpha_group = np.clip(alpha_group, 0.0, 0.99)
     tau_group   = np.clip(tau_group, 0.0, 0.99 - alpha_group)
 
-    clamp_mask = sum_gt > 0.99
-    if np.any(clamp_mask):
-        scale_f = 0.99 / np.maximum(sum_gt, 1e-12)
-        alpha_group *= scale_f; tau_group *= scale_f
-        st.warning(f"{int(clamp_mask.sum())} elements had α+τ > 1 and were scaled to keep α+τ ≤ 0.99.")
-    alpha_group = np.clip(alpha_group, 0.0, 0.99)
-    tau_group   = np.clip(tau_group, 0.0, 0.99 - alpha_group)
-
-    # Per-face broadband arrays (always filled)
+    # Build per-face α/τ (broadband by default)
     alpha_face = np.full(len(F), float(alpha_default), dtype=np.float32)
     tau_face   = np.zeros(len(F), dtype=np.float32)
 
