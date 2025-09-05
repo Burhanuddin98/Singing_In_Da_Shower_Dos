@@ -2,11 +2,8 @@ from __future__ import annotations
 from acoustics.bands import standard_centers
 
 # --- Optional banded materials (library) ---
-from acoustics.materials import (
-    builtin_library, load_csv_library, load_json_library, merge_libraries, to_broadband
-)
+from acoustics.materials import builtin_library, to_broadband
 from acoustics.config import OCTAVE_CENTERS
-import pandas as pd
 
 import trimesh
 
@@ -165,29 +162,6 @@ def main():
             phys_normalization = st.checkbox("Physically normalized (MC unbiased)", value=False)
             band_mode = st.selectbox("Band mode", ["broadband", "octave", "third", "twelfth"], index=0)
 
-            # Build band centers + libraries for this run
-            centers = list(standard_centers(band_mode))
-
-            # Always have a builtin baseline.
-            lib = builtin_library(centers)
-
-            # Optional external libraries (only if your acoustics.materials implements them)
-            try:
-                _csv = load_csv_library("./materials/library.csv", centers)
-                lib.update(_csv)
-            except Exception:
-                pass
-
-            try:
-                _json = load_json_library("./materials/library.json", centers)
-                lib.update(_json)
-            except Exception:
-                pass
-
-            lib_names = sorted(list(lib.keys()))
-
-
-
             brdf_model = st.selectbox("BRDF model", ["specular+jitter", "spec+lambert"], index=0)
             scatter_ratio = st.slider("Scatter ratio (Lambert share)", 0.0, 1.0, 0.0, 0.05,
                                       help="Only used if BRDF is spec+lambert")
@@ -246,167 +220,87 @@ def main():
     faces_count = np.array([c.size for c in components], dtype=int)
     alpha_init = np.array([float(np.median(alpha_auto[c])) if c.size else alpha_default for c in components], dtype=float)
 
-    # ===== Per-element materials (α and τ) =====
+    # ===== Per-element materials (α, τ, scatter) =====
     st.subheader("Per-element materials")
 
-    # A) Toggle: use banded library, or numeric broadband table
     use_lib = st.checkbox(
         "Use library materials (banded) per element",
         value=False,
-        help="When ON, per-band α/τ (and scatter if available) are used from the material library."
+        help="Overrides the numeric α/τ table below when ON."
     )
+
+    lib = builtin_library()           # native tables (octave in our stub)
+    lib_names = list(lib.keys())
+    dst_freqs = standard_centers(band_mode)  # <-- current active bands
+
+    if use_lib and band_mode == "broadband":
+        st.info("Library is banded; switch Band mode to 'octave', 'third', or 'twelfth' for realistic results.")
+
+    # Build the library assignment UI if enabled
+    if use_lib:
+        st.caption("Assign a library material to each element. α/τ/scatter per-band will be used for tracing.")
+        mat_choices = []
+        for gid, count in zip(group_ids, faces_count):
+            sel = st.selectbox(
+                f"Element {int(gid)} — {int(count)} faces",
+                lib_names,
+                index=lib_names.index("Concrete") if "Concrete" in lib_names else 0,
+                key=f"lib_{int(gid)}"
+            )
+            mat_choices.append(sel)
+
 
     # Always show the numeric table (still useful for preview/broadband)
-    base_rows = [
-        {"Element ID": int(g), "Faces": int(c), "α (absorption)": float(a), "τ (transmission)": 0.00}
-        for g, c, a in zip(group_ids, faces_count, alpha_init)
-    ]
-
-    raw_table = st.data_editor(
-        base_rows,
-        hide_index=True,
-        num_rows="fixed",
-        key="mat_table",
-    )
-
-    # Coerce to pandas DataFrame no matter what Streamlit returns
-    df = pd.DataFrame(raw_table)
-
-    # Validate shape / columns
-    if df is None or df.shape[0] == 0:
-        st.stop()
-
-    required_cols = ["Element ID", "Faces", "α (absorption)", "τ (transmission)"]
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        st.error(f"Material table is missing columns: {missing}")
-        st.stop()
-
-    # Clean & cast
-    df = df.fillna(0)
-    alpha_group = df["α (absorption)"].astype(float).to_numpy()
-    tau_group   = df["τ (transmission)"].astype(float).to_numpy()
-    faces_count = df["Faces"].astype(int).to_numpy()
-    group_ids   = df["Element ID"].astype(int).to_numpy()
-
-    # Clamp and renormalize if needed
+    base_rows = [{"Element ID": int(g), "Faces": int(c), "α (absorption)": float(a), "τ (transmission)": 0.00}
+                 for g, c, a in zip(group_ids, faces_count, alpha_init)]
+    table = st.data_editor(base_rows, hide_index=True, num_rows="fixed", key="mat_table")
+    alpha_group = np.array([float(row["α (absorption)"]) for row in table], dtype=float)
+    tau_group = np.array([float(row["τ (transmission)"]) for row in table], dtype=float)
     sum_gt = alpha_group + tau_group
     clamp_mask = sum_gt > 0.99
     if np.any(clamp_mask):
         scale_f = 0.99 / np.maximum(sum_gt, 1e-12)
-        alpha_group *= scale_f
-        tau_group   *= scale_f
+        alpha_group *= scale_f; tau_group *= scale_f
         st.warning(f"{int(clamp_mask.sum())} elements had α+τ > 1 and were scaled to keep α+τ ≤ 0.99.")
-
     alpha_group = np.clip(alpha_group, 0.0, 0.99)
-    tau_group   = np.clip(tau_group, 0.0, 0.99 - alpha_group)
+    tau_group = np.clip(tau_group, 0.0, 0.99 - alpha_group)
 
     # Build per-face α/τ (broadband by default)
     alpha_face = np.full(len(F), float(alpha_default), dtype=np.float32)
     tau_face   = np.zeros(len(F), dtype=np.float32)
 
-    alpha_face_b_override = None
-    tau_face_b_override   = None
-    scatter_face_b_override = None
-    bands_override        = None
-
     if not use_lib:
+        # numeric editor → per-face arrays
         for gi, faces_idx in enumerate(components):
             alpha_face[faces_idx] = float(alpha_group[gi])
             tau_face[faces_idx]   = float(tau_group[gi])
+        alpha_face_b_override = None
+        tau_face_b_override = None
+        scatter_face_b_override = None
+        bands_override = None
     else:
-        st.caption("Assign library materials to elements. The library is banded; switch band mode to octave/third/twelfth to change centers.")
-        page_size = 25
-        total_pages = max(1, int(np.ceil(len(group_ids)/page_size)))
-        cols_top = st.columns([2,2,2,2])
-        with cols_top[0]:
-            page = st.number_input("Page", 1, total_pages, 1, 1)
-        with cols_top[1]:
-            default_mat = st.selectbox("Default material", lib_names,
-                                    index=lib_names.index("Concrete") if "Concrete" in lib_names else 0)
-        with cols_top[2]:
-            if st.button("Apply default to ALL elements"):
-                for gid in group_ids:
-                    st.session_state[f"lib_{int(gid)}"] = default_mat
-        with cols_top[3]:
-            st.caption(f"{len(group_ids)} elements · {len(centers)} bands")
-
-        start = (page-1)*page_size
-        stop  = min(len(group_ids), start+page_size)
-
-        # Header
-        hcols = st.columns([1,2,4])
-        hcols[0].markdown("**ID**")
-        hcols[1].markdown("**Faces**")
-        hcols[2].markdown("**Material (banded)**")
-
-        # Rows
-        for i in range(start, stop):
-            gid = int(group_ids[i]); count = int(faces_count[i])
-            rcols = st.columns([1,2,4])
-            rcols[0].write(gid)
-            rcols[1].write(count)
-            current = st.session_state.get(f"lib_{gid}", default_mat)
-            st.session_state[f"lib_{gid}"] = rcols[2].selectbox(
-                f"Element {gid}", lib_names,
-                index=lib_names.index(current) if current in lib_names else 0,
-                key=f"lib_{gid}_sb",
-                label_visibility="collapsed"
-            )
-
-        # Build per-face banded overrides + fill broadband preview arrays
-        B = len(centers)
+        # Library path → per-band arrays (F x B) + broadband preview fill
+        B = len(dst_freqs)
         alpha_face_b_override   = np.zeros((len(F), B), dtype=np.float32)
         tau_face_b_override     = np.zeros((len(F), B), dtype=np.float32)
         scatter_face_b_override = np.zeros((len(F), B), dtype=np.float32)
 
         for gi, faces_idx in enumerate(components):
-            gid = int(group_ids[gi])
-            mat_name = st.session_state.get(f"lib_{gid}", default_mat)
-            mb = lib[mat_name]
-            alpha_face_b_override[faces_idx, :]   = mb.alpha[None, :]
-            tau_face_b_override[faces_idx,   :]   = mb.tau[None, :]
-            if getattr(mb, "scatter", None) is not None:
-                scatter_face_b_override[faces_idx, :] = mb.scatter[None, :]
-            # Broadband preview (mean)
-            a_bb, t_bb = to_broadband(mb.alpha, mb.tau, method="mean")
+            # Resample library material to the active bands
+            m_native = lib[mat_choices[gi]]
+            m = m_native.to_bands(dst_freqs)      # alpha, tau, scatter now at dst_freqs
+            alpha_face_b_override[faces_idx, :]   = m.alpha[None, :]
+            tau_face_b_override[faces_idx,   :]   = m.tau[None, :]
+            scatter_face_b_override[faces_idx, :] = m.scatter[None, :]
+
+            # Broadband collapse for preview / legacy pieces
+            a_bb, t_bb = to_broadband(m.alpha, m.tau, method="mean")
             alpha_face[faces_idx] = a_bb
             tau_face[faces_idx]   = t_bb
 
-        bands_override = centers
+        bands_override = dst_freqs  # ensure tracer uses same list
 
-    # -------- Material inspector (bandwise plots) --------
-    with st.expander("Material Inspector (bandwise)"):
-        # This block is READ-ONLY: it only plots curves from the loaded library.
-        if 'lib_names' in locals() and len(lib_names):
-            mat_name = st.selectbox(
-                "Material",
-                lib_names,
-                index=lib_names.index("Concrete") if "Concrete" in lib_names else 0,
-            )
-            mb = lib[mat_name]
-            cols_i = st.columns(3)
-            series = [
-                ("α (absorption)", mb.alpha),
-                ("τ (transmission)", mb.tau),
-                ("s (scatter)", mb.scatter if getattr(mb, "scatter", None) is not None else np.zeros_like(mb.alpha)),
-            ]
-            for j, (title, arr) in enumerate(series):
-                with cols_i[j]:
-                    figm = go.Figure(go.Scatter(x=mb.centers, y=np.asarray(arr, float), mode="lines+markers"))
-                    figm.update_layout(
-                        height=220,
-                        margin=dict(l=10, r=10, t=30, b=10),
-                        title=title,
-                        xaxis_type="log",
-                        paper_bgcolor="#000",
-                        plot_bgcolor="#000",
-                        font=dict(color="#e6edf3"),
-                    )
-                    st.plotly_chart(figm, use_container_width=True)
-        else:
-            st.info("Turn on library materials and/or load a library to inspect band curves here.")
-            
+
     # Positions
     S = np.array([Sx, Sy, Sz], dtype=float); R = np.array([Rx, Ry, Rz], dtype=float)
 
@@ -483,27 +377,15 @@ def main():
     # --- Run simulation ---
     run_clicked = run
     if run_clicked:
-        try:
-            h, arrivals, polylines = trace_cached(
-                cfg_key, V, F, S, R,
-                alpha_face.copy(), tau_face.copy(),
-                band_mode=str(band_mode),
-                alpha_face_b_override=alpha_face_b_override,
-                tau_face_b_override=tau_face_b_override,
-                bands_override=bands_override,
-                scatter_face_b_override=scatter_face_b_override,
-            )
-        except TypeError:
-            # Back-end may not yet support scatter override; fall back gracefully
-            h, arrivals, polylines = trace_cached(
-                cfg_key, V, F, S, R,
-                alpha_face.copy(), tau_face.copy(),
-                band_mode=str(band_mode),
-                alpha_face_b_override=alpha_face_b_override,
-                tau_face_b_override=tau_face_b_override,
-                bands_override=bands_override,
-            )
-
+        h, arrivals, polylines = trace_cached(
+            cfg_key, V, F, S, R,
+            alpha_face.copy(), tau_face.copy(),
+            band_mode=str(band_mode),
+            alpha_face_b_override=alpha_face_b_override,
+            tau_face_b_override=tau_face_b_override,
+            bands_override=bands_override,
+            scatter_face_b_override=scatter_face_b_override,
+        )
 
         st.session_state.update({
             "h": h, "arrivals": arrivals, "polylines": polylines, "V": V, "F": F, "S": S, "R": R,
